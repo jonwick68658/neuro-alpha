@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeuroLM Desktop</title>
+    <style>
+        :root {
+            --primary-color: #4f46e5;
+            --dark-bg: #000000;
+            --card-bg: #2a2a2a;
+            --light-text: #ffffff;
+            --border-color: #404040;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--dark-bg);
+            color: var(--light-text);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .header {
+            background: var(--card-bg);
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .logo {
+            width: 32px;
+            height: 32px;
+        }
+        
+        .main-content {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+        
+        .sidebar {
+            width: 250px;
+            background: var(--card-bg);
+            border-right: 1px solid var(--border-color);
+            padding: 1rem;
+            overflow-y: auto;
+        }
+        
+        .content-area {
+            flex: 1;
+            padding: 1rem;
+            overflow-y: auto;
+        }
+        
+        .model-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .model-card:hover {
+            border-color: var(--primary-color);
+            box-shadow: 0 2px 8px rgba(79, 70, 229, 0.2);
+        }
+        
+        .model-card.installed {
+            border-color: #10b981;
+        }
+        
+        .model-name {
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+        
+        .model-description {
+            font-size: 0.9rem;
+            opacity: 0.8;
+            margin-bottom: 0.5rem;
+        }
+        
+        .model-status {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+        
+        .btn-primary {
+            background: var(--primary-color);
+            color: white;
+        }
+        
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+        
+        .btn-secondary {
+            background: var(--border-color);
+            color: var(--light-text);
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: var(--border-color);
+            border-radius: 2px;
+            overflow: hidden;
+            margin: 0.5rem 0;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: var(--primary-color);
+            transition: width 0.3s;
+        }
+        
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ef4444;
+        }
+        
+        .status-dot.connected {
+            background: #10b981;
+        }
+        
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <img src="../assets/icon.png" alt="NeuroLM" class="logo">
+        <h1>NeuroLM Desktop</h1>
+        <div class="status-indicator">
+            <div class="status-dot" id="connectionStatus"></div>
+            <span id="connectionText">Connecting...</span>
+        </div>
+    </div>
+    
+    <div class="main-content">
+        <div class="sidebar">
+            <h3>Navigation</h3>
+            <div class="nav-item" onclick="showPage('models')">Available Models</div>
+            <div class="nav-item" onclick="showPage('installed')">Installed Models</div>
+            <div class="nav-item" onclick="showPage('settings')">Settings</div>
+        </div>
+        
+        <div class="content-area">
+            <div id="models-page">
+                <h2>Available AI Models</h2>
+                <div id="models-list">
+                    <!-- Models will be loaded here -->
+                </div>
+            </div>
+            
+            <div id="installed-page" class="hidden">
+                <h2>Installed Models</h2>
+                <div id="installed-list">
+                    <!-- Installed models will be shown here -->
+                </div>
+            </div>
+            
+            <div id="settings-page" class="hidden">
+                <h2>Settings</h2>
+                <div class="settings-section">
+                    <h3>Server Connection</h3>
+                    <input type="text" id="serverUrl" placeholder="Server URL" value="http://localhost:5000">
+                    <button class="btn btn-primary" onclick="connectToServer()">Connect</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="renderer.js"></script>
+</body>
+</html>

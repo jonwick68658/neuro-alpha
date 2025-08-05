@@ -1,0 +1,3492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeuroLM Chat Interface</title>
+    <link rel="manifest" href="/manifest.json">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        :root {
+            --primary-color: #4f46e5;
+            --secondary-color: #4338ca;
+            --accent-color: #ff7d4d;
+            --dark-bg: #000000;
+            --darker-bg: #1a1a1a;
+            --card-bg: #2a2a2a;
+            --light-text: #ffffff;
+            --muted-text: #9ca3af;
+            --border-color: #404040;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        body {
+            background: var(--dark-bg);
+            color: var(--light-text);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        .header {
+            background: var(--dark-bg);
+            color: var(--light-text);
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+            position: relative;
+            min-height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header h1 {
+            font-size: 1.2rem;
+            margin: 0;
+            color: var(--light-text);
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        .header p {
+            opacity: 0.8;
+            font-size: 0.7rem;
+            color: var(--light-text);
+            display: inline-block;
+            margin: 0;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .header-title {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .hamburger-btn {
+            background: none;
+            border: none;
+            color: var(--light-text);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 4px;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+        }
+
+        .hamburger-btn:hover {
+            background: rgba(255,255,255,0.1);
+        }
+
+        .uf-score-badge {
+            background: linear-gradient(45deg, #3b82f6, #1d4ed8);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: bold;
+            margin-left: auto;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            position: relative;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+        }
+
+        .uf-score-badge:hover {
+            transform: translateY(-1px);
+        }
+
+        .uf-score-tooltip {
+            position: absolute;
+            top: calc(100% + 10px);
+            right: 0;
+            background: #1f2937;
+            color: white;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            line-height: 1.4;
+            width: 280px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+            z-index: 1000;
+        }
+
+        .uf-score-tooltip::before {
+            content: '';
+            position: absolute;
+            bottom: 100%;
+            right: 12px;
+            border: 6px solid transparent;
+            border-bottom-color: #1f2937;
+        }
+
+        .uf-score-badge:hover .uf-score-tooltip {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .tooltip-title {
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #60a5fa;
+        }
+
+        .tooltip-rewards {
+            margin-top: 8px;
+        }
+
+        .tooltip-rewards strong {
+            color: #fbbf24;
+        }
+
+        .tooltip-rewards ul {
+            margin: 4px 0 0 16px;
+            padding: 0;
+        }
+
+        .tooltip-rewards li {
+            margin: 2px 0;
+            color: #d1d5db;
+        }
+
+        .uf-score-badge .score-label {
+            opacity: 0.9;
+        }
+
+        .uf-score-badge .score-value {
+            font-size: 0.8rem;
+        }
+
+        .main-container {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+
+        .sidebar {
+            width: 320px;
+            background: var(--dark-bg);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            transform: translateX(0);
+            transition: transform 0.3s ease;
+            position: relative;
+            z-index: 999;
+        }
+
+        .sidebar.collapsed {
+            transform: translateX(-100%);
+        }
+
+        .sidebar-overlay {
+            display: none;
+            position: fixed;
+            top: 40px;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 998;
+        }
+
+        .sidebar-overlay.active {
+            display: block;
+        }
+
+        @media (max-width: 768px) {
+            .sidebar {
+                position: fixed;
+                top: 40px;
+                left: 0;
+                height: calc(100vh - 40px);
+                z-index: 999;
+                transform: translateX(-100%);
+                box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+            }
+            
+            .sidebar.open {
+                transform: translateX(0);
+            }
+            
+            .chat-container {
+                margin-left: 0 !important;
+                width: 100% !important;
+            }
+
+            /* Show model selector on mobile, hide files dropdown */
+            .header > div:nth-child(3) {
+                display: none !important;
+            }
+            
+            /* Make model selector mobile-friendly */
+            .header > div:nth-child(2) {
+                margin-left: 0.5rem !important;
+            }
+            
+            .header > div:nth-child(2) label {
+                font-size: 0.6rem !important;
+            }
+            
+            .header > div:nth-child(2) #modelSearch {
+                min-width: 120px !important;
+                font-size: 0.7rem !important;
+                padding: 0.1rem !important;
+            }
+
+            /* Ensure hamburger menu is prominent on mobile */
+            .hamburger-btn {
+                font-size: 1.4rem;
+                padding: 0.5rem;
+                width: 40px;
+                height: 40px;
+            }
+
+            /* Compress header for mobile */
+            .header {
+                height: 50px;
+                padding: 0.5rem;
+            }
+
+            .header h1 {
+                font-size: 1.1rem;
+            }
+
+            .header p {
+                font-size: 0.65rem;
+            }
+
+            /* Mobile input layout optimization */
+            .chat-input-container {
+                flex-direction: column !important;
+                gap: 0.5rem;
+            }
+
+            .chat-input {
+                width: 100% !important;
+                min-height: 80px !important;
+                margin-bottom: 0.5rem;
+            }
+
+            .input-buttons {
+                display: flex;
+                justify-content: flex-end;
+                gap: 0.5rem;
+            }
+
+            .upload-button, .web-search-button, .send-button {
+                position: static !important;
+                margin: 0 !important;
+            }
+
+            /* Enhanced scrolling for mobile */
+            .chat-messages {
+                padding-bottom: 120px !important;
+                scroll-behavior: smooth;
+                height: calc(100vh - 180px) !important;
+            }
+
+            /* Ensure chat container uses full available height */
+            .chat-container {
+                height: calc(100vh - 50px) !important;
+            }
+
+            .chat-messages {
+                height: calc(100% - 120px) !important;
+                overflow-y: auto;
+            }
+        }
+
+        @media (min-width: 769px) {
+            .sidebar {
+                position: fixed;
+                top: 40px;
+                left: 0;
+                height: calc(100vh - 40px);
+                z-index: 999;
+                box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+            }
+            
+            .chat-container {
+                margin-left: 0;
+                width: 100%;
+            }
+        }
+
+        .sidebar-header {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .new-chat-btn {
+            width: 100%;
+            padding: 0.75rem;
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .new-chat-btn:hover {
+            background: var(--secondary-color);
+        }
+
+        .topic-selection {
+            margin-bottom: 1rem;
+        }
+
+        .topic-selection label {
+            display: block;
+            font-size: 0.9rem;
+            margin-bottom: 0.3rem;
+            color: var(--light-text);
+            font-weight: 500;
+        }
+
+        .topic-select, .subtopic-select {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+            background: var(--card-bg);
+            color: var(--light-text);
+        }
+
+        .topic-select:focus, .subtopic-select:focus {
+            border-color: var(--primary-color);
+            outline: none;
+        }
+
+        .conversations-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+        }
+
+        .conversation-item {
+            padding: 1rem;
+            margin: 0.5rem 0;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            transition: background 0.2s ease;
+            border: 1px solid transparent;
+            position: relative;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--darker-bg);
+        }
+
+        .conversation-item:hover {
+            background: var(--card-bg);
+        }
+
+        .conversation-item.active {
+            background: var(--primary-color);
+            color: white;
+            border-color: var(--primary-color);
+        }
+
+        .conversation-content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .conversation-menu {
+            position: relative;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .conversation-item:hover .conversation-menu {
+            opacity: 1;
+        }
+
+        .menu-button {
+            background: none;
+            border: none;
+            font-size: 1.2rem;
+            color: var(--muted-text);
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+            transition: background 0.3s;
+        }
+
+        .menu-button:hover {
+            background: rgba(255,255,255,0.1);
+        }
+
+        .conversation-item.active .menu-button {
+            color: white;
+        }
+
+        .conversation-item.active .menu-button:hover {
+            background: rgba(255,255,255,0.2);
+        }
+
+        .dropdown-menu {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            min-width: 150px;
+            z-index: 1000;
+            display: none;
+        }
+
+        .dropdown-menu.show {
+            display: block;
+        }
+
+        .dropdown-item {
+            padding: 0.75rem 1rem;
+            cursor: pointer;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+            font-size: 0.9rem;
+            color: var(--light-text);
+            transition: background 0.3s;
+        }
+
+        .dropdown-item:hover {
+            background: var(--border-color);
+        }
+
+        .dropdown-item.delete {
+            color: #dc3545;
+        }
+
+        .dropdown-item.delete:hover {
+            background: #ffeaea;
+        }
+
+        /* Confirmation Modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+        }
+
+        .modal-overlay.show {
+            display: flex;
+        }
+
+        .modal {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .modal h3 {
+            margin: 0 0 1rem 0;
+            color: var(--dark-text);
+            font-size: 1.2rem;
+        }
+
+        .modal p {
+            margin: 0 0 1.5rem 0;
+            color: #666;
+            line-height: 1.5;
+        }
+
+        .modal-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: flex-end;
+        }
+
+        .modal-button {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .modal-button.cancel {
+            background: #f8f9fa;
+            color: var(--dark-text);
+            border: 1px solid var(--border-color);
+        }
+
+        .modal-button.cancel:hover {
+            background: #e9ecef;
+        }
+
+        .modal-button.delete {
+            background: #dc3545;
+            color: white;
+        }
+
+        .modal-button.delete:hover {
+            background: #c82333;
+        }
+
+        .conversation-title {
+            font-weight: 500;
+            font-size: 0.9rem;
+            margin-bottom: 0.25rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .conversation-meta {
+            font-size: 0.75rem;
+            opacity: 0.7;
+        }
+
+        .conversation-topic {
+            font-size: 0.7rem;
+            color: #666;
+            background: #f5f5f5;
+            padding: 2px 6px;
+            border-radius: 10px;
+            margin: 4px 0;
+            display: inline-block;
+        }
+
+        .conversation-preview {
+            font-size: 0.75rem;
+            color: #999;
+            margin: 4px 0;
+            font-style: italic;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .load-more-conversations, .load-earlier-messages {
+            padding: 10px;
+            text-align: center;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .load-more-btn {
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            transition: background 0.3s;
+        }
+
+        .load-more-btn:hover {
+            background: var(--secondary-color);
+        }
+
+        .load-more-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .load-earlier-messages {
+            margin-bottom: 10px;
+            border-bottom: 1px solid var(--border-color);
+            border-top: none;
+        }
+
+        .chat-header {
+            padding: 0.75rem 1rem;
+            background: var(--darker-bg);
+            border-bottom: 1px solid var(--border-color);
+            border-radius: 10px 10px 0 0;
+        }
+
+        .conversation-topic-display {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        #topicDisplayText {
+            font-size: 0.9rem;
+            color: var(--light-text);
+            font-weight: 500;
+        }
+
+        .edit-topic-btn {
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 0.4rem 0.8rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .edit-topic-btn:hover {
+            background: var(--secondary-color);
+        }
+
+        .topic-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .topic-modal.show {
+            display: flex;
+        }
+
+        .topic-modal-content {
+            background: var(--card-bg);
+            padding: 2rem;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 400px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            color: var(--light-text);
+        }
+
+        .topic-modal h3 {
+            margin: 0 0 1rem 0;
+            color: var(--primary-color);
+        }
+
+        .topic-modal-buttons {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1.5rem;
+        }
+
+        .modal-btn {
+            padding: 0.6rem 1.2rem;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background 0.3s;
+        }
+
+        .modal-btn.save {
+            background: var(--primary-color);
+            color: white;
+        }
+
+        .modal-btn.save:hover {
+            background: var(--secondary-color);
+        }
+
+        .modal-btn.cancel {
+            background: #6c757d;
+            color: white;
+        }
+
+        .modal-btn.cancel:hover {
+            background: #545b62;
+        }
+
+        .modal-btn.remove {
+            background: #dc3545;
+            color: white;
+        }
+
+        .modal-btn.remove:hover {
+            background: #c82333;
+        }
+
+        .chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            max-width: none;
+            margin: 0;
+            width: 100%;
+            padding: 0;
+            overflow: hidden;
+            background: var(--dark-bg);
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem 1rem 100px 1rem;
+            background: var(--dark-bg);
+            height: calc(100vh - 120px);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .welcome-screen {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 2rem;
+        }
+
+        .welcome-image {
+            max-width: 600px;
+            width: 100%;
+            height: auto;
+            object-fit: contain;
+        }
+
+        .logo {
+            width: 360px;
+            height: 240px;
+            margin-bottom: 2rem;
+        }
+
+        .welcome-text h2 {
+            font-size: 1.8rem;
+            margin-bottom: 0.5rem;
+            color: var(--light-text);
+        }
+
+        .welcome-text p {
+            font-size: 1.2rem;
+            color: var(--muted-text);
+        }
+
+        .message {
+            margin-bottom: 1rem;
+            padding: 1rem;
+            border-radius: 1rem;
+            max-width: 85%;
+            word-wrap: break-word;
+            font-size: 16px;
+            line-height: 1.5;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+
+        .user-message {
+            background: var(--primary-color);
+            color: var(--light-text);
+            margin-left: auto;
+            text-align: right;
+            align-self: flex-end;
+        }
+
+        .assistant-message {
+            background: var(--card-bg);
+            color: var(--light-text);
+            align-self: flex-start;
+            margin-right: auto;
+        }
+
+        .message-info {
+            font-size: 0.8rem;
+            opacity: 0.7;
+            margin-top: 0.5rem;
+        }
+
+        .chat-input-container {
+            position: fixed;
+            bottom: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 90%;
+            max-width: 768px;
+            z-index: 1000;
+        }
+
+        .chat-input-container::before {
+            content: '';
+            position: absolute;
+            bottom: 50%;
+            left: -40px;
+            right: -40px;
+            height: 80px;
+            background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0.8));
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        .input-wrapper {
+            position: relative;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 18px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            transition: all 0.2s ease;
+            min-height: 38px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .input-wrapper:focus-within {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .chat-input {
+            width: 100%;
+            background: transparent;
+            border: none;
+            padding: 10px 14px 0px 14px;
+            font-size: 16px;
+            outline: none;
+            resize: none;
+            min-height: 16px;
+            max-height: 100px;
+            font-family: inherit;
+            line-height: 20px;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            overflow-y: auto;
+            transition: height 0.2s ease;
+            color: var(--light-text);
+        }
+
+        .chat-input::placeholder {
+            color: var(--muted-text);
+        }
+
+        .input-controls {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 2px 10px 6px 14px;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+
+
+        .send-button {
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 16px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            min-width: 48px;
+            height: 32px;
+            flex-shrink: 0;
+            font-weight: 500;
+        }
+
+        .send-button:hover {
+            background: var(--secondary-color);
+        }
+
+        .send-button:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+
+        .tools-container {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .tools-button {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            background: transparent;
+            color: var(--muted-text);
+            border: none;
+            padding: 6px 8px;
+            border-radius: 16px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .tools-button:hover {
+            background: #f3f4f6;
+            color: #374151;
+        }
+
+        .tools-button.active {
+            background: #e5e7eb;
+            color: #374151;
+        }
+
+        .tools-icon {
+            font-size: 1rem;
+            transition: transform 0.2s ease;
+        }
+
+        .tools-button.active .tools-icon {
+            transform: rotate(45deg);
+        }
+
+        .tools-text {
+            font-weight: 500;
+        }
+
+        .tools-menu {
+            position: absolute;
+            bottom: 100%;
+            left: 0;
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            padding: 6px;
+            min-width: 160px;
+            margin-bottom: 6px;
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(10px);
+            transition: all 0.2s ease;
+            z-index: 1001;
+        }
+
+        .tools-menu.show {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+
+        .tool-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            padding: 8px 10px;
+            background: transparent;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.2s ease;
+            font-size: 0.85rem;
+            text-align: left;
+            color: #374151;
+        }
+
+        .tool-item:hover {
+            background: #f3f4f6;
+        }
+
+        .tool-item.active {
+            background: #e5e7eb;
+            color: #1f2937;
+        }
+
+        .tool-icon {
+            font-size: 1rem;
+            width: 18px;
+            text-align: center;
+        }
+
+        .tool-label {
+            font-weight: 500;
+        }
+
+        .voice-recording {
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .memory-indicator {
+            font-size: 0.9rem;
+            text-align: center;
+            margin: 1rem 0;
+            padding: 0.5rem;
+            background: rgba(74, 111, 165, 0.1);
+            border-radius: 5px;
+            color: var(--primary-color);
+            position: fixed;
+            bottom: 90px;
+            left: 50%;
+        }
+
+        /* Typing indicator styles */
+        .typing-indicator {
+            background: var(--light-bg);
+            color: var(--dark-text);
+            border-left: 4px solid var(--secondary-color);
+            padding: 1rem;
+            border-radius: 10px;
+            max-width: 70%;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .typing-text {
+            font-style: italic;
+            opacity: 0.8;
+        }
+
+        .typing-dots {
+            display: flex;
+            gap: 2px;
+        }
+
+        .typing-dot {
+            width: 6px;
+            height: 6px;
+            background-color: var(--secondary-color);
+            border-radius: 50%;
+            animation: typing 1.4s infinite ease-in-out;
+        }
+
+        .typing-dot:nth-child(1) {
+            animation-delay: 0s;
+        }
+
+        .typing-dot:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-dot:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typing {
+            0%, 60%, 100% {
+                transform: scale(1);
+                opacity: 0.5;
+            }
+            30% {
+                transform: scale(1.2);
+                opacity: 1;
+            }
+        }
+            transform: translateX(-50%);
+            width: 95%;
+            max-width: 1200px;
+            z-index: 999;
+        }
+
+        .nav-links {
+            position: absolute;
+            top: 1rem;
+            right: 2rem;
+        }
+
+        .nav-links a {
+            color: var(--light-text);
+            text-decoration: none;
+            margin-left: 1rem;
+            opacity: 0.8;
+            transition: opacity 0.3s ease;
+        }
+
+        .nav-links a:hover {
+            opacity: 1;
+        }
+
+        #modelSelector {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            padding: 0.3rem;
+            border-radius: 4px;
+        }
+
+        #modelSelector option {
+            background: var(--primary-color);
+            color: white;
+            padding: 0.3rem;
+        }
+
+        .model-search-container {
+            position: relative;
+            display: inline-block;
+        }
+
+        #modelSearch {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            padding: 0.3rem;
+            border-radius: 4px;
+            min-width: 200px;
+        }
+
+        #modelSearch::placeholder {
+            color: rgba(255,255,255,0.7);
+        }
+
+        .model-dropdown, .file-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: var(--primary-color);
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 4px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 1000;
+            display: none;
+        }
+
+        .file-search-container {
+            position: relative;
+            display: inline-block;
+        }
+
+        .slash-suggestions {
+            position: absolute;
+            bottom: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 1000;
+            display: none;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            margin-bottom: 4px;
+        }
+
+        .slash-suggestions.active {
+            display: block;
+        }
+
+        .slash-command-item {
+            padding: 0.75rem;
+            cursor: pointer;
+            border-bottom: 1px solid var(--border-color);
+            transition: background 0.2s;
+        }
+
+        .slash-command-item:last-child {
+            border-bottom: none;
+        }
+
+        .slash-command-item:hover,
+        .slash-command-item.highlighted {
+            background: var(--light-bg);
+        }
+
+        .slash-command-name {
+            font-weight: 600;
+            color: var(--primary-color);
+            margin-bottom: 0.25rem;
+        }
+
+        .slash-command-desc {
+            font-size: 0.85rem;
+            color: var(--dark-text);
+            margin-bottom: 0.25rem;
+        }
+
+        .slash-command-usage {
+            font-size: 0.8rem;
+            color: #666;
+            font-family: 'Courier New', monospace;
+            background: #f8f9fa;
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+        }
+
+        .model-option {
+            padding: 0.5rem;
+            color: white;
+            cursor: pointer;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .model-option:hover {
+            background: rgba(255,255,255,0.1);
+        }
+
+        .model-option.selected {
+            background: rgba(255,255,255,0.2);
+        }
+
+        .model-name {
+            font-weight: bold;
+        }
+
+        .model-id {
+            font-size: 0.8rem;
+            opacity: 0.8;
+        }
+
+        .message-actions {
+            display: flex;
+            gap: 0.5rem;
+            justify-content: flex-end;
+            margin-top: 0.5rem;
+            align-items: center;
+        }
+
+        .action-button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 0.4rem;
+            border-radius: 6px;
+            transition: background-color 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .action-button:hover {
+            background: rgba(0, 0, 0, 0.1);
+        }
+
+        .action-button svg {
+            width: 16px;
+            height: 16px;
+            fill: #6b7280;
+            transition: fill 0.2s ease;
+        }
+
+        .action-button:hover svg {
+            fill: #374151;
+        }
+
+        .copy-button:hover svg {
+            fill: #059669;
+        }
+
+
+
+        /* New feedback pill buttons */
+        .feedback-buttons {
+            display: flex;
+            gap: 6px;
+            margin-top: 4px;
+        }
+
+        .feedback-pill {
+            background: #f3f4f6;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 4px 8px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: #6b7280;
+            text-decoration: none;
+        }
+
+        .feedback-pill:hover {
+            background: #e5e7eb;
+            color: #374151;
+        }
+
+        .feedback-pill.active {
+            background: #dbeafe;
+            border-color: #3b82f6;
+            color: #1d4ed8;
+        }
+
+        .feedback-pill.great-response.active {
+            background: #dcfce7;
+            border-color: #16a34a;
+            color: #166534;
+        }
+
+        .feedback-pill.that-worked.active {
+            background: #fef3c7;
+            border-color: #d97706;
+            color: #92400e;
+        }
+
+        .feedback-pill.not-helpful.active {
+            background: #fee2e2;
+            border-color: #dc2626;
+            color: #991b1b;
+        }
+
+        .code-container {
+            position: relative;
+            margin: 1rem 0;
+        }
+
+        .code-copy-button {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            border: none;
+            padding: 0.3rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            z-index: 10;
+        }
+
+        .code-copy-button:hover {
+            background: rgba(0,0,0,0.9);
+        }
+
+        .code-language-indicator {
+            position: absolute;
+            top: 0.5rem;
+            left: 0.5rem;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            border: none;
+            padding: 0.3rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            z-index: 10;
+            font-family: 'Courier New', monospace;
+        }
+
+        pre {
+            background: #1a1a1a;
+            border: 1px solid #404040;
+            border-radius: 6px;
+            padding: 2.5rem 1rem 1rem 1rem;
+            overflow-x: auto;
+            margin: 1rem 0;
+            position: relative;
+            color: #e5e7eb;
+        }
+
+        code {
+            background: #2a2a2a;
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            color: #e5e7eb;
+        }
+
+        pre code {
+            background: none;
+            padding: 0;
+            color: #e5e7eb;
+        }
+
+        blockquote {
+            border-left: 4px solid var(--secondary-color);
+            margin: 1rem 0;
+            padding-left: 1rem;
+            color: #666;
+            font-style: italic;
+        }
+
+        ul, ol {
+            margin: 1rem 0;
+            padding-left: 2rem;
+        }
+
+        li {
+            margin: 0.5rem 0;
+        }
+
+        h1, h2, h3, h4, h5, h6 {
+            margin: 1rem 0 0.5rem 0;
+            color: var(--primary-color);
+        }
+
+        strong {
+            font-weight: 600;
+            color: var(--dark-text);
+        }
+
+        em {
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <button id="sidebarToggle" class="hamburger-btn">☰</button>
+            <div class="header-title">
+                <h1 onclick="showWelcomeScreen()" style="cursor: pointer;">NeuroLM Chat</h1>
+                <p>AI chat with integrated memory system</p>
+            </div>
+        </div>
+        
+        <div style="margin-left: 1rem; display: inline-block;">
+            <label for="modelSearch" style="margin-right: 0.3rem; font-size: 0.7rem;">Model:</label>
+            <div class="model-search-container" style="display: inline-block;">
+                <input type="text" id="modelSearch" placeholder="Search models..." readonly style="min-width: 150px; font-size: 0.8rem; padding: 0.2rem;">
+                <div class="model-dropdown" id="modelDropdown"></div>
+            </div>
+        </div>
+        
+        <div style="margin-left: 1rem; display: inline-block;">
+            <label for="fileSearch" style="margin-right: 0.3rem; font-size: 0.7rem;">Files:</label>
+            <div class="file-search-container" style="display: inline-block;">
+                <input type="text" id="fileSearch" placeholder="Search files..." readonly style="min-width: 150px; font-size: 0.8rem; padding: 0.2rem;">
+                <div class="file-dropdown" id="fileDropdown"></div>
+            </div>
+        </div>
+        
+        <div class="uf-score-badge" id="ufScoreBadge">
+            <span class="score-label">UF Score:</span>
+            <span class="score-value" id="ufScoreValue">0</span>
+            <div class="uf-score-tooltip">
+                <div class="tooltip-title">User Feedback Score</div>
+                <div>Earn UF Score points by providing feedback on AI responses. Your feedback helps improve the system and deliver better results.</div>
+                <div class="tooltip-rewards">
+                    <strong>Upcoming rewards:</strong>
+                    <ul>
+                        <li>Cryptocurrency rewards</li>
+                        <li>Higher rate limits</li>
+                        <li>Early access to new features</li>
+                        <li>Exclusive premium capabilities</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+    
+    <div class="main-container">
+        <div class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="topic-selection">
+                    <label for="topicSelect">Topic:</label>
+                    <select class="topic-select" id="topicSelect">
+                        <option value="">All Topics</option>
+                        <option value="__new__">+ Create New Topic</option>
+                    </select>
+                    
+                    <label for="subtopicSelect">Sub-topic:</label>
+                    <select class="subtopic-select" id="subtopicSelect" disabled>
+                        <option value="">All Sub-topics</option>
+                        <option value="__new__">+ Create New Sub-topic</option>
+                    </select>
+                </div>
+                <button class="new-chat-btn" id="newChatBtn">+ Start New Chat</button>
+            </div>
+            <div class="conversations-list" id="conversationsList">
+                <!-- Conversations will be loaded here -->
+            </div>
+        </div>
+
+        <div class="chat-container">
+            <div class="chat-header" id="chatHeader">
+                <div class="conversation-topic-display" id="conversationTopicDisplay">
+                    <span id="topicDisplayText">No topic assigned</span>
+                    <button id="editTopicBtn" class="edit-topic-btn">Edit</button>
+                </div>
+            </div>
+            <div class="chat-messages" id="chatMessages">
+                <!-- Welcome Screen -->
+                <div class="welcome-screen" id="welcomeScreen">
+                    <img class="welcome-image" src="/static/neurolm-welcome-image.png" alt="NeuroLM Welcome" />
+                    <div class="welcome-text">
+                        <h2>Welcome Back</h2>
+                        <p id="welcomeUserName">User</p>
+                    </div>
+                </div>
+            </div>
+
+
+
+        <div class="chat-input-container">
+            <div class="input-wrapper">
+                <textarea id="chatInput" class="chat-input" placeholder="Ask anything"></textarea>
+                <div class="slash-suggestions" id="slashSuggestions"></div>
+                <div class="input-controls">
+                    <div class="tools-container">
+                        <button id="toolsButton" class="tools-button" title="Tools">
+                            <span class="tools-icon">+</span>
+                            <span class="tools-text">Tools</span>
+                        </button>
+                        <div class="tools-menu" id="toolsMenu">
+                            <input type="file" id="fileInput" style="display: none;" accept=".txt,.py,.js,.html,.css,.md,.json,.xml,.csv">
+                            <button id="uploadButton" class="tool-item" title="Upload file">
+                                <span class="tool-icon">📎</span>
+                                <span class="tool-label">Upload File</span>
+                            </button>
+                            <button id="webSearchButton" class="tool-item" title="Web search">
+                                <span class="tool-icon">🌐</span>
+                                <span class="tool-label">Web Search</span>
+                            </button>
+                            <button id="microphoneButton" class="tool-item" title="Voice input">
+                                <span class="tool-icon">🎤</span>
+                                <span class="tool-label">Voice Input</span>
+                            </button>
+                        </div>
+                    </div>
+                    <button id="sendButton" class="send-button">Send</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Topic Edit Modal -->
+    <div class="topic-modal" id="topicModal">
+        <div class="topic-modal-content">
+            <h3>Edit Conversation Topic</h3>
+            <div class="topic-selection">
+                <label for="modalTopicSelect">Topic:</label>
+                <select class="topic-select" id="modalTopicSelect">
+                    <option value="">No topic</option>
+                    <option value="__new__">+ Create New Topic</option>
+                </select>
+                
+                <label for="modalSubtopicSelect">Sub-topic:</label>
+                <select class="subtopic-select" id="modalSubtopicSelect" disabled>
+                    <option value="">No sub-topic</option>
+                    <option value="__new__">+ Create New Sub-topic</option>
+                </select>
+            </div>
+            <div class="topic-modal-buttons">
+                <button class="modal-btn save" id="saveTopicBtn">Save</button>
+                <button class="modal-btn remove" id="removeTopicBtn">Remove Topic</button>
+                <button class="modal-btn cancel" id="cancelTopicBtn">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div class="modal-overlay" id="deleteModal">
+        <div class="modal">
+            <h3>Delete Conversation</h3>
+            <p>Delete this conversation and all its memories? This cannot be undone.</p>
+            <div class="modal-buttons">
+                <button class="modal-button cancel" id="cancelDeleteBtn">Cancel</button>
+                <button class="modal-button delete" id="confirmDeleteBtn">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Topic/Subtopic Deletion Modal -->
+    <div class="modal-overlay" id="topicDeleteModal">
+        <div class="modal">
+            <h3 id="topicDeleteTitle">Delete Topic</h3>
+            <div id="topicDeleteContent">
+                <p><strong>Topic:</strong> <span id="deleteTopic"></span></p>
+                <p id="deleteSubtopicRow" style="display: none;"><strong>Subtopic:</strong> <span id="deleteSubtopic"></span></p>
+                <p><strong>Conversations:</strong> <span id="deleteConversationCount"></span></p>
+                <p id="deleteSubtopicCountRow"><strong>Subtopics:</strong> <span id="deleteSubtopicCount"></span></p>
+                <p><strong>Total messages:</strong> <span id="deleteTotalMessages"></span></p>
+                <br>
+                <p style="color: #dc3545; font-weight: bold;">⚠️ This action will permanently delete all data and cannot be undone.</p>
+            </div>
+            <div class="modal-buttons">
+                <button class="modal-button cancel" id="cancelTopicDeleteBtn">Cancel</button>
+                <button class="modal-button delete" id="confirmTopicDeleteBtn">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const chatMessages = document.getElementById('chatMessages');
+        const chatInput = document.getElementById('chatInput');
+        const sendButton = document.getElementById('sendButton');
+        const toolsButton = document.getElementById('toolsButton');
+        const toolsMenu = document.getElementById('toolsMenu');
+        const uploadButton = document.getElementById('uploadButton');
+        const webSearchButton = document.getElementById('webSearchButton');
+        const microphoneButton = document.getElementById('microphoneButton');
+        const fileInput = document.getElementById('fileInput');
+
+        const newChatBtn = document.getElementById('newChatBtn');
+        const conversationsList = document.getElementById('conversationsList');
+        const fileSearch = document.getElementById('fileSearch');
+        const fileDropdown = document.getElementById('fileDropdown');
+        const sidebarToggle = document.getElementById('sidebarToggle');
+        const sidebar = document.getElementById('sidebar');
+        const sidebarOverlay = document.getElementById('sidebarOverlay');
+        const chatContainer = document.querySelector('.chat-container');
+        const slashSuggestions = document.getElementById('slashSuggestions');
+        
+        // Topic modal elements
+        const topicModal = document.getElementById('topicModal');
+        const editTopicBtn = document.getElementById('editTopicBtn');
+        const modalTopicSelect = document.getElementById('modalTopicSelect');
+        const modalSubtopicSelect = document.getElementById('modalSubtopicSelect');
+        const saveTopicBtn = document.getElementById('saveTopicBtn');
+        const removeTopicBtn = document.getElementById('removeTopicBtn');
+        const cancelTopicBtn = document.getElementById('cancelTopicBtn');
+        
+        // Topic deletion modal elements
+        const cancelTopicDeleteBtn = document.getElementById('cancelTopicDeleteBtn');
+        const confirmTopicDeleteBtn = document.getElementById('confirmTopicDeleteBtn');
+        const topicDisplayText = document.getElementById('topicDisplayText');
+        
+        // Delete modal elements
+        const deleteModal = document.getElementById('deleteModal');
+        const cancelDeleteBtn = document.getElementById('cancelDeleteBtn');
+        const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
+        let conversationToDelete = null;
+        
+        let selectedModel = 'openai/gpt-4o-mini';
+        let allModels = [];
+        let filteredModels = [];
+        let currentConversationId = null;
+        let conversations = [];
+        let conversationsOffset = 0;
+        let hasMoreConversations = false;
+        let loadingConversations = false;
+        let currentMessages = [];
+        let hasMoreMessages = false;
+        let loadingMessages = false;
+        let oldestMessageId = null;
+        let userFiles = [];
+        let filteredFiles = [];
+        let sidebarOpen = false; // Default closed on all devices
+        let highlightedSuggestion = -1;
+        let toolsMenuOpen = false;
+        let isRecording = false;
+        let recognition = null;
+        let allTopics = {};
+        let selectedTopic = '';
+        let selectedSubtopic = '';
+        let userName = '';
+        let currentConversationTopic = null;
+        let currentConversationSubtopic = null;
+        let webSearchEnabled = false;
+        
+        // Topic selection elements
+        const topicSelect = document.getElementById('topicSelect');
+        const subtopicSelect = document.getElementById('subtopicSelect');
+        
+        // Initialize speech recognition
+        function initializeSpeechRecognition() {
+            if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                recognition = new SpeechRecognition();
+                recognition.continuous = false;
+                recognition.interimResults = false;
+                recognition.lang = 'en-US';
+
+                recognition.onstart = function() {
+                    isRecording = true;
+                    microphoneButton.classList.add('voice-recording');
+                    microphoneButton.querySelector('.tool-label').textContent = 'Listening...';
+                };
+
+                recognition.onresult = function(event) {
+                    const transcript = event.results[0][0].transcript;
+                    chatInput.value = transcript;
+                    autoResizeTextarea();
+                    chatInput.focus();
+                };
+
+                recognition.onerror = function(event) {
+                    console.error('Speech recognition error:', event.error);
+                    stopRecording();
+                };
+
+                recognition.onend = function() {
+                    stopRecording();
+                };
+            } else {
+                microphoneButton.style.display = 'none';
+                console.log('Speech recognition not supported in this browser');
+            }
+        }
+
+        function startRecording() {
+            if (recognition && !isRecording) {
+                recognition.start();
+            }
+        }
+
+        function stopRecording() {
+            isRecording = false;
+            microphoneButton.classList.remove('voice-recording');
+            microphoneButton.querySelector('.tool-label').textContent = 'Voice Input';
+            if (recognition) {
+                recognition.stop();
+            }
+        }
+
+        function toggleToolsMenu() {
+            toolsMenuOpen = !toolsMenuOpen;
+            toolsButton.classList.toggle('active', toolsMenuOpen);
+            toolsMenu.classList.toggle('show', toolsMenuOpen);
+        }
+
+        function closeToolsMenu() {
+            toolsMenuOpen = false;
+            toolsButton.classList.remove('active');
+            toolsMenu.classList.remove('show');
+        }
+
+        function autoResizeTextarea() {
+            // Reset height to auto to get accurate scrollHeight
+            chatInput.style.height = 'auto';
+            
+            // Calculate dimensions
+            const scrollHeight = chatInput.scrollHeight;
+            const minHeight = 36; // Single line baseline height
+            const maxHeight = 120; // 6 lines at 20px line-height
+            
+            // Calculate new height within bounds
+            const newHeight = Math.max(minHeight, Math.min(scrollHeight, maxHeight));
+            
+            // Apply the calculated height
+            chatInput.style.height = newHeight + 'px';
+            
+            // Handle overflow based on height
+            if (newHeight >= maxHeight) {
+                chatInput.style.overflowY = 'auto';
+            } else {
+                chatInput.style.overflowY = 'hidden';
+            }
+        }
+
+        // Slash command definitions
+        const slashCommands = [
+            {
+                cmd: '/files',
+                desc: 'List all uploaded files',
+                usage: '/files'
+            },
+            {
+                cmd: '/view',
+                desc: 'Display file content',
+                usage: '/view filename.txt'
+            },
+            {
+                cmd: '/delete',
+                desc: 'Delete a file',
+                usage: '/delete filename.txt'
+            },
+            {
+                cmd: '/search',
+                desc: 'Search files by name',
+                usage: '/search term'
+            },
+            {
+                cmd: '/topics',
+                desc: 'List all topics and sub-topics',
+                usage: '/topics'
+            },
+            {
+                cmd: '/link',
+                desc: 'Link current message to specified topic',
+                usage: '/link cooking'
+            },
+            {
+                cmd: '/unlink',
+                desc: 'Remove links between topics',
+                usage: '/unlink cooking'
+            },
+            {
+                cmd: '/delete-topic',
+                desc: 'Delete a topic and all its data (with confirmation popup)',
+                usage: '/delete-topic cooking'
+            },
+            {
+                cmd: '/delete-subtopic',
+                desc: 'Delete a subtopic and all its data (with confirmation popup)',
+                usage: '/delete-subtopic cooking recipes'
+            }
+        ];
+
+        // Load all models from OpenRouter
+        async function loadModels() {
+            try {
+                const response = await fetch('/api/models');
+                allModels = await response.json();
+                filteredModels = [...allModels];
+                
+                // Set initial model display
+                const defaultModel = allModels.find(m => m.id === selectedModel);
+                if (defaultModel) {
+                    document.getElementById('modelSearch').value = defaultModel.name;
+                }
+                
+                updateDropdown();
+            } catch (error) {
+                console.error('Error loading models:', error);
+                // Backend will provide fallback models
+                allModels = [];
+                filteredModels = [];
+            }
+        }
+
+        function updateDropdown() {
+            const dropdown = document.getElementById('modelDropdown');
+            dropdown.innerHTML = '';
+            
+            filteredModels.forEach(model => {
+                const option = document.createElement('div');
+                option.className = 'model-option';
+                option.innerHTML = `
+                    <div class="model-name">${model.name}</div>
+                    <div class="model-id">${model.id}</div>
+                `;
+                option.addEventListener('click', () => selectModel(model));
+                dropdown.appendChild(option);
+            });
+        }
+
+        function selectModel(model) {
+            selectedModel = model.id;
+            document.getElementById('modelSearch').value = model.name;
+            document.getElementById('modelDropdown').style.display = 'none';
+            console.log('Model selected:', model.id);
+        }
+
+        function filterModels(searchTerm) {
+            const term = searchTerm.toLowerCase();
+            filteredModels = allModels.filter(model => 
+                model.name.toLowerCase().includes(term) || 
+                model.id.toLowerCase().includes(term)
+            );
+            updateDropdown();
+        }
+
+        // Model search functionality
+        document.getElementById('modelSearch').addEventListener('click', function() {
+            this.readOnly = false;
+            this.select();
+            document.getElementById('modelDropdown').style.display = 'block';
+        });
+
+        document.getElementById('modelSearch').addEventListener('input', function() {
+            filterModels(this.value);
+            document.getElementById('modelDropdown').style.display = 'block';
+        });
+
+        document.getElementById('modelSearch').addEventListener('blur', function() {
+            // Delay hiding dropdown to allow clicks
+            setTimeout(() => {
+                document.getElementById('modelDropdown').style.display = 'none';
+                this.readOnly = true;
+            }, 200);
+        });
+
+        // Load models on page load
+        document.addEventListener('DOMContentLoaded', loadModels);
+
+        // Send message function
+        async function sendMessage() {
+            const message = chatInput.value.trim();
+            if (!message) return;
+
+            // Disable input while processing
+            chatInput.disabled = true;
+            sendButton.disabled = true;
+            sendButton.textContent = 'Sending...';
+
+            // Add user message to chat
+            addMessage(message, 'user');
+            chatInput.value = '';
+            
+            // Reset textarea height to baseline
+            autoResizeTextarea();
+
+            // Show typing indicator
+            showTypingIndicator();
+
+            try {
+                // Use the selected model from the search dropdown
+                
+                // Call chat API
+                const requestBody = { 
+                    message: message,
+                    model: selectedModel,
+                    conversation_id: currentConversationId
+                };
+                
+                if (webSearchEnabled) {
+                    requestBody.web_search = true;
+                }
+                
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+
+                if (!response.ok) {
+                    throw new Error('Chat request failed');
+                }
+
+                const data = await response.json();
+                
+                // Remove typing indicator before showing response
+                removeTypingIndicator();
+                
+                // Update current conversation ID
+                if (data.conversation_id) {
+                    currentConversationId = data.conversation_id;
+                    // Refresh conversations list
+                    loadConversations();
+                }
+                
+                // Check if this is a deletion confirmation request
+                if (data.response === 'DELETION_CONFIRM' && data.deletion_info) {
+                    console.log('DEBUG: Deletion confirmation detected:', data.deletion_info);
+                    showTopicDeleteModal(data.deletion_info);
+                } else {
+                    // Add assistant response to chat using PostgreSQL message ID
+                    addMessage(data.response, 'assistant', null, data.assistant_message_id);
+                }
+
+            } catch (error) {
+                console.error('Chat error:', error);
+                // Remove typing indicator on error too
+                removeTypingIndicator();
+                addMessage('Sorry, I encountered an error. Please try again.', 'assistant', 'Error occurred');
+            } finally {
+                // Re-enable input
+                chatInput.disabled = false;
+                sendButton.disabled = false;
+                sendButton.textContent = 'Send';
+                chatInput.focus();
+            }
+        }
+
+        // Show typing indicator
+        function showTypingIndicator() {
+            const typingDiv = document.createElement('div');
+            typingDiv.className = 'typing-indicator';
+            typingDiv.id = 'typing-indicator';
+            
+            typingDiv.innerHTML = `
+                <span class="typing-text">Thinking</span>
+                <div class="typing-dots">
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                </div>
+            `;
+            
+            chatMessages.appendChild(typingDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // Remove typing indicator
+        function removeTypingIndicator() {
+            const typingIndicator = document.getElementById('typing-indicator');
+            if (typingIndicator) {
+                typingIndicator.remove();
+            }
+        }
+
+        // Add message to chat display
+        function addMessage(content, sender, info = null, messageId = null) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}-message`;
+            
+            // Use provided messageId or generate one for user messages
+            if (!messageId) {
+                messageId = 'msg_' + Date.now();
+            }
+            messageDiv.id = messageId;
+            
+            let messageHTML = '';
+            if (sender === 'assistant') {
+                // Render markdown for assistant messages
+                const renderedContent = marked.parse(content);
+                messageHTML = `<div>${renderedContent}</div>`;
+                if (info) {
+                    messageHTML += `<div class="message-info">${info}</div>`;
+                }
+                messageHTML += `
+                    <div class="message-actions">
+                        <button class="action-button copy-button" onclick="copyToClipboard('${messageId}', this)" title="Copy message">
+                            <svg viewBox="0 0 24 24">
+                                <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+                            </svg>
+                        </button>
+                        <div class="feedback-buttons">
+                            <button class="feedback-pill great-response" onclick="submitFeedback('${messageId}', 'great_response', this)" title="Great response">Great response</button>
+                            ${content.includes('```') ? '<button class="feedback-pill that-worked" onclick="submitFeedback(\'' + messageId + '\', \'that_worked\', this)" title="That worked">That worked</button>' : ''}
+                            <button class="feedback-pill not-helpful" onclick="submitFeedback('${messageId}', 'not_helpful', this)" title="Not helpful at all">Not helpful</button>
+                        </div>
+                    </div>
+                `;
+            } else {
+                messageHTML = `<div>${content}</div>`;
+                if (info) {
+                    messageHTML += `<div class="message-info">${info}</div>`;
+                }
+            }
+            
+            messageDiv.innerHTML = messageHTML;
+            chatMessages.appendChild(messageDiv);
+            
+            // Add copy buttons to code blocks
+            if (sender === 'assistant') {
+                addCodeCopyButtons(messageDiv);
+            }
+            
+            // Scroll to bottom
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function addCodeCopyButtons(container) {
+            const codeBlocks = container.querySelectorAll('pre');
+            codeBlocks.forEach((pre) => {
+                // Add copy button
+                const button = document.createElement('button');
+                button.className = 'code-copy-button';
+                button.textContent = 'Copy';
+                button.onclick = () => copyCodeBlock(pre, button);
+                pre.style.position = 'relative';
+                pre.appendChild(button);
+
+                // Add language indicator
+                const code = pre.querySelector('code');
+                if (code) {
+                    const language = detectLanguage(code);
+                    if (language) {
+                        const languageIndicator = document.createElement('div');
+                        languageIndicator.className = 'code-language-indicator';
+                        languageIndicator.textContent = language;
+                        pre.appendChild(languageIndicator);
+                    }
+                }
+            });
+        }
+
+        function detectLanguage(codeElement) {
+            // Try to detect language from class names (markdown syntax highlighting)
+            const classList = codeElement.classList;
+            for (let className of classList) {
+                if (className.startsWith('language-')) {
+                    return className.replace('language-', '');
+                }
+                if (className.startsWith('hljs-')) {
+                    return className.replace('hljs-', '');
+                }
+            }
+
+            // Simple heuristic-based detection
+            const code = codeElement.textContent;
+            if (code.includes('def ') || code.includes('import ') || code.includes('print(')) {
+                return 'python';
+            }
+            if (code.includes('function ') || code.includes('const ') || code.includes('let ')) {
+                return 'javascript';
+            }
+            if (code.includes('<!DOCTYPE') || code.includes('<html>')) {
+                return 'html';
+            }
+            if (code.includes('{') && code.includes('}') && (code.includes('"') || code.includes("'"))) {
+                return 'json';
+            }
+            if (code.includes('SELECT') || code.includes('FROM') || code.includes('WHERE')) {
+                return 'sql';
+            }
+            if (code.includes('#include') || code.includes('int main')) {
+                return 'cpp';
+            }
+            if (code.includes('public class') || code.includes('System.out')) {
+                return 'java';
+            }
+            if (code.includes('<?php') || code.includes('echo ')) {
+                return 'php';
+            }
+
+            return null; // Unknown language
+        }
+
+        function copyCodeBlock(codeElement, button) {
+            const code = codeElement.querySelector('code');
+            const text = code ? code.textContent : codeElement.textContent;
+            
+            navigator.clipboard.writeText(text).then(() => {
+                button.textContent = 'Copied!';
+                setTimeout(() => {
+                    button.textContent = 'Copy';
+                }, 2000);
+            }).catch(err => {
+                console.error('Failed to copy: ', err);
+            });
+        }
+
+        async function copyToClipboard(messageId, button) {
+            const messageElement = document.getElementById(messageId);
+            if (messageElement) {
+                // Clone the message element to avoid modifying the original
+                const clone = messageElement.cloneNode(true);
+                
+                // Remove elements we don't want to copy
+                const messageInfo = clone.querySelector('.message-info');
+                const messageActions = clone.querySelector('.message-actions');
+                if (messageInfo) messageInfo.remove();
+                if (messageActions) messageActions.remove();
+                
+                // Get the remaining text content
+                const messageContent = clone.textContent.trim();
+                
+                navigator.clipboard.writeText(messageContent).then(() => {
+                    const originalTitle = button.title;
+                    button.title = 'Copied!';
+                    button.style.opacity = '0.7';
+                    setTimeout(() => {
+                        button.title = originalTitle;
+                        button.style.opacity = '1';
+                    }, 2000);
+                    
+                    // Send positive feedback to RIAI system for copy action
+                    sendImplicitFeedback(messageId, 'copy', 0.3);
+                    
+                }).catch(err => {
+                    console.error('Failed to copy: ', err);
+                });
+            }
+        }
+        
+        async function sendImplicitFeedback(messageId, actionType, score) {
+            try {
+                const response = await fetch('/api/feedback-implicit', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message_id: messageId,
+                        action_type: actionType,
+                        feedback_score: score
+                    })
+                });
+                
+                if (response.ok) {
+                    console.log(`RIAI implicit feedback recorded: ${actionType} = ${score}`);
+                } else {
+                    console.log('Implicit feedback submission failed silently');
+                }
+            } catch (error) {
+                console.log('Implicit feedback error (continuing silently):', error);
+            }
+        }
+
+        // New feedback system for pill buttons
+        async function submitFeedback(messageId, feedbackType, button) {
+            const feedbackKey = `feedback_${messageId}`;
+            let currentFeedback = localStorage.getItem(feedbackKey);
+            
+            // Find the message element to get all feedback buttons
+            const messageElement = document.getElementById(messageId);
+            if (!messageElement) return;
+            
+            const feedbackButtons = messageElement.querySelectorAll('.feedback-pill');
+            
+            // Clear all active states
+            feedbackButtons.forEach(btn => btn.classList.remove('active'));
+            
+            // If clicking the same button that's already active, remove feedback
+            if (currentFeedback === feedbackType) {
+                localStorage.removeItem(feedbackKey);
+            } else {
+                // Set new feedback
+                localStorage.setItem(feedbackKey, feedbackType);
+                button.classList.add('active');
+                
+                // Send feedback to backend for RIAI H(t) function
+                try {
+                    const response = await fetch('/api/feedback', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            message_id: messageId,
+                            feedback_type: feedbackType
+                        })
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        console.log(`RIAI feedback recorded: ${data.h_t_score}`);
+                        
+                        // Refresh UF Score after successful feedback submission
+                        await loadUserName();
+                    } else {
+                        console.error('Failed to submit feedback to RIAI system');
+                    }
+                } catch (error) {
+                    console.error('Error submitting feedback:', error);
+                    // Keep localStorage functionality even if API fails
+                }
+            }
+        }
+
+
+
+        function restoreFeedbackStates() {
+            // Restore feedback states from localStorage when page loads
+            const messages = document.querySelectorAll('.assistant-message[id]');
+            messages.forEach(messageElement => {
+                const messageId = messageElement.id;
+                const feedbackKey = `feedback_${messageId}`;
+                const feedback = localStorage.getItem(feedbackKey);
+                
+                if (feedback) {
+                    // Handle new pill buttons
+                    const feedbackButtons = messageElement.querySelectorAll('.feedback-pill');
+                    feedbackButtons.forEach(btn => {
+                        if (btn.classList.contains(feedback.replace('_', '-'))) {
+                            btn.classList.add('active');
+                        }
+                    });
+                    
+
+                }
+            });
+        }
+
+
+
+        // File upload functionality
+        async function uploadFile(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            try {
+                uploadButton.textContent = 'Uploading...';
+                uploadButton.disabled = true;
+                
+                const response = await fetch('/api/upload-file', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Upload failed');
+                }
+                
+                const data = await response.json();
+                addMessage(`File uploaded successfully: ${file.name}`, 'system', 'File upload');
+                
+            } catch (error) {
+                console.error('Upload error:', error);
+                addMessage(`Failed to upload file: ${file.name}`, 'system', 'Upload error');
+            } finally {
+                uploadButton.textContent = '📎';
+                uploadButton.disabled = false;
+            }
+        }
+
+        // Event listeners
+        uploadButton.addEventListener('click', () => {
+            fileInput.click();
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                uploadFile(file);
+            }
+        });
+        
+        webSearchButton.addEventListener('click', () => {
+            webSearchEnabled = !webSearchEnabled;
+            webSearchButton.classList.toggle('active', webSearchEnabled);
+            webSearchButton.title = webSearchEnabled ? 'Disable web search' : 'Enable web search';
+        });
+        
+        sendButton.addEventListener('click', sendMessage);
+        
+        // Chat input handling for slash commands
+        chatInput.addEventListener('input', (e) => {
+            const inputText = e.target.value;
+            
+            // Show slash suggestions when user types '/'
+            if (inputText.startsWith('/') && inputText.length > 1) {
+                showSlashSuggestions(inputText);
+            } else if (inputText.startsWith('/') && inputText.length === 1) {
+                // Show all commands when just '/' is typed
+                showSlashSuggestions('/');
+            } else {
+                hideSlashSuggestions();
+            }
+        });
+
+        chatInput.addEventListener('keydown', async (e) => {
+            const isSlashSuggestionsVisible = slashSuggestions.classList.contains('active');
+            
+            if (isSlashSuggestionsVisible) {
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    navigateSuggestions('down');
+                    return;
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    navigateSuggestions('up');
+                    return;
+                } else if (e.key === 'Enter' && highlightedSuggestion >= 0) {
+                    e.preventDefault();
+                    selectHighlightedSuggestion();
+                    return;
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    hideSlashSuggestions();
+                    return;
+                }
+            }
+            
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                hideSlashSuggestions();
+                await sendMessage();
+            }
+        });
+
+        // Conversation management functions
+        async function loadConversations(reset = false) {
+            if (loadingConversations) return;
+            
+            try {
+                loadingConversations = true;
+                
+                if (reset) {
+                    conversationsOffset = 0;
+                    conversations = [];
+                }
+                
+                // Build query parameters for filtering
+                let url = `/api/conversations?limit=20&offset=${conversationsOffset}`;
+                
+                const selectedTopic = document.getElementById('topicSelect').value;
+                const selectedSubtopic = document.getElementById('subtopicSelect').value;
+                
+                if (selectedTopic && selectedTopic !== '__new__') {
+                    url += `&topic=${encodeURIComponent(selectedTopic)}`;
+                }
+                
+                if (selectedSubtopic && selectedSubtopic !== '__new__') {
+                    url += `&sub_topic=${encodeURIComponent(selectedSubtopic)}`;
+                }
+                
+                const response = await fetch(url);
+                if (response.ok) {
+                    const result = await response.json();
+                    
+                    if (reset) {
+                        conversations = result.conversations;
+                    } else {
+                        conversations = conversations.concat(result.conversations);
+                    }
+                    
+                    hasMoreConversations = result.has_more;
+                    conversationsOffset = result.next_offset || 0;
+                    
+                    renderConversations();
+                }
+            } catch (error) {
+                console.error('Error loading conversations:', error);
+            } finally {
+                loadingConversations = false;
+            }
+        }
+
+        async function loadMoreConversations() {
+            if (!hasMoreConversations || loadingConversations) return;
+            await loadConversations(false);
+        }
+
+        function renderConversations() {
+            conversationsList.innerHTML = '';
+            
+            conversations.forEach(conversation => {
+                const conversationDiv = document.createElement('div');
+                conversationDiv.className = 'conversation-item';
+                conversationDiv.setAttribute('data-conversation-id', conversation.id);
+                if (conversation.id === currentConversationId) {
+                    conversationDiv.classList.add('active');
+                }
+                
+                const date = new Date(conversation.updated_at).toLocaleDateString();
+                let topicInfo = '';
+                if (conversation.topic && conversation.topic !== 'general') {
+                    topicInfo = `<div class="conversation-topic">${conversation.topic}${conversation.sub_topic ? ' → ' + conversation.sub_topic : ''}</div>`;
+                }
+                
+                let messagePreview = '';
+                if (conversation.last_message) {
+                    const preview = conversation.last_message.length > 60 
+                        ? conversation.last_message.substring(0, 60) + '...' 
+                        : conversation.last_message;
+                    messagePreview = `<div class="conversation-preview">${preview}</div>`;
+                }
+                
+                conversationDiv.innerHTML = `
+                    <div class="conversation-content">
+                        <div class="conversation-title">${conversation.title}</div>
+                        ${topicInfo}
+                        ${messagePreview}
+                        <div class="conversation-meta">${date} • ${conversation.message_count} messages</div>
+                    </div>
+                    <div class="conversation-menu">
+                        <button class="menu-button" onclick="toggleConversationMenu(event, '${conversation.id}')">⋮</button>
+                        <div class="dropdown-menu" id="menu-${conversation.id}">
+                            <button class="dropdown-item delete" onclick="showDeleteConfirmation('${conversation.id}')">Delete Conversation</button>
+                        </div>
+                    </div>
+                `;
+                
+                // Add click listener to conversation content only
+                const conversationContent = conversationDiv.querySelector('.conversation-content');
+                conversationContent.addEventListener('click', () => loadConversation(conversation.id));
+                conversationsList.appendChild(conversationDiv);
+            });
+            
+            // Add "Load More" button if there are more conversations
+            if (hasMoreConversations) {
+                const loadMoreDiv = document.createElement('div');
+                loadMoreDiv.className = 'load-more-conversations';
+                loadMoreDiv.innerHTML = `
+                    <button class="load-more-btn" onclick="loadMoreConversations()">
+                        ${loadingConversations ? 'Loading...' : 'Load More Conversations'}
+                    </button>
+                `;
+                conversationsList.appendChild(loadMoreDiv);
+            }
+        }
+
+        function updateActiveConversation(conversationId) {
+            // Efficiently update only the active state without rebuilding the entire list
+            document.querySelectorAll('.conversation-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            
+            // Find and activate the selected conversation
+            const activeItem = document.querySelector(`.conversation-item[data-conversation-id="${conversationId}"]`);
+            if (activeItem) {
+                activeItem.classList.add('active');
+            }
+        }
+
+        async function loadConversation(conversationId) {
+            try {
+                // Clear current chat and reset message state
+                chatMessages.innerHTML = '';
+                currentMessages = [];
+                hasMoreMessages = false;
+                oldestMessageId = null;
+                
+                // Get recent messages for conversation
+                const response = await fetch(`/api/conversations/${conversationId}/messages?limit=30`);
+                if (response.ok) {
+                    const result = await response.json();
+                    currentMessages = result.messages;
+                    hasMoreMessages = result.has_more;
+                    oldestMessageId = result.oldest_id;
+                    
+                    // Add "Load Earlier Messages" button if there are more
+                    if (hasMoreMessages) {
+                        addLoadEarlierButton();
+                    }
+                    
+                    // Render messages
+                    result.messages.forEach(message => {
+                        addMessage(message.content, message.message_type, 
+                                 message.message_type === 'assistant' ? 'Loaded from conversation' : null,
+                                 message.id);
+                    });
+                    
+                    // Restore feedback states for loaded messages
+                    restoreFeedbackStates();
+                    
+                    currentConversationId = conversationId;
+                    
+                    // Update current conversation topic state and display
+                    updateCurrentTopicDisplay(result.messages[0]);
+                    updateActiveConversation(conversationId); // Update active state efficiently
+                }
+            } catch (error) {
+                console.error('Error loading conversation:', error);
+            }
+        }
+
+        function updateCurrentTopicDisplay(firstMessage) {
+            // Get current conversation from the conversations list
+            const currentConv = conversations.find(conv => conv.id === currentConversationId);
+            if (currentConv) {
+                currentConversationTopic = currentConv.topic;
+                currentConversationSubtopic = currentConv.sub_topic;
+                updateTopicDisplayText();
+            }
+        }
+
+        function updateTopicDisplayText() {
+            if (currentConversationTopic && currentConversationTopic !== 'general') {
+                let displayText = currentConversationTopic;
+                if (currentConversationSubtopic) {
+                    displayText += ` → ${currentConversationSubtopic}`;
+                }
+                topicDisplayText.textContent = displayText;
+            } else {
+                topicDisplayText.textContent = 'No topic assigned';
+            }
+        }
+
+        function addLoadEarlierButton() {
+            const loadMoreDiv = document.createElement('div');
+            loadMoreDiv.className = 'load-earlier-messages';
+            loadMoreDiv.id = 'loadEarlierMessages';
+            loadMoreDiv.innerHTML = `
+                <button class="load-more-btn" onclick="loadEarlierMessages()">
+                    Load Earlier Messages
+                </button>
+            `;
+            chatMessages.insertBefore(loadMoreDiv, chatMessages.firstChild);
+        }
+
+        async function loadEarlierMessages() {
+            if (loadingMessages || !hasMoreMessages || !oldestMessageId) return;
+            
+            try {
+                loadingMessages = true;
+                const loadButton = document.querySelector('#loadEarlierMessages button');
+                if (loadButton) loadButton.textContent = 'Loading...';
+                
+                const response = await fetch(`/api/conversations/${currentConversationId}/messages?limit=30&before_id=${oldestMessageId}`);
+                if (response.ok) {
+                    const result = await response.json();
+                    
+                    // Remove existing load button
+                    const existingButton = document.getElementById('loadEarlierMessages');
+                    if (existingButton) existingButton.remove();
+                    
+                    // Add new messages at the top using addMessage to maintain proper structure
+                    const tempDiv = document.createElement('div');
+                    result.messages.forEach(message => {
+                        const messageDiv = document.createElement('div');
+                        messageDiv.className = `message ${message.message_type}-message`;
+                        
+                        // Generate unique message ID
+                        const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                        messageDiv.id = messageId;
+                        
+                        let messageHTML = '';
+                        if (message.message_type === 'assistant') {
+                            const renderedContent = marked.parse(message.content);
+                            messageHTML = `<div>${renderedContent}</div>`;
+                            messageHTML += `<div class="message-info">Loaded from conversation</div>`;
+                            messageHTML += `
+                                <div class="message-actions">
+                                    <button class="action-button copy-button" onclick="copyToClipboard('${messageId}', this)" title="Copy message">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+                                        </svg>
+                                    </button>
+                                    <div class="feedback-buttons">
+                                        <button class="feedback-pill great-response" onclick="submitFeedback('${messageId}', 'great_response', this)" title="Great response">Great response</button>
+                                        ${message.content.includes('```') ? '<button class="feedback-pill that-worked" onclick="submitFeedback(\'' + messageId + '\', \'that_worked\', this)" title="That worked">That worked</button>' : ''}
+                                        <button class="feedback-pill not-helpful" onclick="submitFeedback('${messageId}', 'not_helpful', this)" title="Not helpful at all">Not helpful</button>
+                                    </div>
+                                </div>
+                            `;
+                        } else {
+                            messageHTML = `<div>${message.content}</div>`;
+                        }
+                        
+                        messageDiv.innerHTML = messageHTML;
+                        tempDiv.appendChild(messageDiv);
+                    });
+                    
+                    // Insert at beginning of chat
+                    while (tempDiv.firstChild) {
+                        chatMessages.insertBefore(tempDiv.firstChild, chatMessages.firstChild);
+                    }
+                    
+                    // Restore feedback states for newly loaded messages
+                    restoreFeedbackStates();
+                    
+                    // Update state
+                    hasMoreMessages = result.has_more;
+                    oldestMessageId = result.oldest_id;
+                    
+                    // Add new load button if there are still more messages
+                    if (hasMoreMessages) {
+                        addLoadEarlierButton();
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading earlier messages:', error);
+            } finally {
+                loadingMessages = false;
+            }
+        }
+
+        async function startNewChat() {
+            try {
+                const conversationData = {};
+                
+                // Include topic and sub-topic if selected
+                if (selectedTopic && selectedTopic !== '__new__') {
+                    conversationData.topic = selectedTopic;
+                    if (selectedSubtopic && selectedSubtopic !== '__new__') {
+                        conversationData.sub_topic = selectedSubtopic;
+                    }
+                }
+                
+                const response = await fetch('/api/conversations/new', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(conversationData)
+                });
+                
+                if (response.ok) {
+                    const newConversation = await response.json();
+                    currentConversationId = newConversation.id;
+                    
+                    // Clear chat messages
+                    chatMessages.innerHTML = '';
+                    
+                    // Add welcome message with topic info
+                    let greeting = userName ? `Hello, ${userName}!` : 'Hello!';
+                    let welcomeMessage = `${greeting} I'm NeuroLM with an integrated memory system. I can remember our conversations and learn from them. What would you like to talk about?`;
+                    let memoryInfo = 'Memory system active • Ready to learn';
+                    
+                    if (selectedTopic && selectedTopic !== '__new__') {
+                        memoryInfo += ` • Topic: ${selectedTopic}`;
+                        if (selectedSubtopic && selectedSubtopic !== '__new__') {
+                            memoryInfo += ` → ${selectedSubtopic}`;
+                        }
+                    }
+                    
+                    addMessage(welcomeMessage, 'assistant', memoryInfo);
+                    
+                    // Reload conversations list and topics
+                    loadConversations(true);
+                    loadTopics();
+                } else {
+                    const errorData = await response.json();
+                    alert(errorData.detail || 'Error creating conversation');
+                }
+            } catch (error) {
+                console.error('Error creating new conversation:', error);
+            }
+        }
+
+        // Topic management functions
+        async function loadTopics() {
+            try {
+                const response = await fetch('/api/topics');
+                if (response.ok) {
+                    allTopics = await response.json();
+                    updateTopicDropdowns();
+                }
+            } catch (error) {
+                console.error('Error loading topics:', error);
+            }
+        }
+
+        function updateTopicDropdowns() {
+            // Update topic dropdown
+            topicSelect.innerHTML = '<option value="">Select or create topic</option><option value="__new__">+ Create New Topic</option>';
+            
+            Object.keys(allTopics).forEach(topic => {
+                const option = document.createElement('option');
+                option.value = topic;
+                option.textContent = topic;
+                topicSelect.appendChild(option);
+            });
+            
+            // Update subtopic dropdown
+            updateSubtopicDropdown();
+        }
+
+        function updateSubtopicDropdown() {
+            subtopicSelect.innerHTML = '<option value="">Select or create sub-topic</option>';
+            
+            if (selectedTopic && selectedTopic !== '__new__') {
+                subtopicSelect.disabled = false;
+                
+                // Add existing sub-topics if topic exists in allTopics
+                if (allTopics[selectedTopic]) {
+                    allTopics[selectedTopic].forEach(subtopic => {
+                        const option = document.createElement('option');
+                        option.value = subtopic;
+                        option.textContent = subtopic;
+                        subtopicSelect.appendChild(option);
+                    });
+                }
+                
+                // Add create new option if less than 5 sub-topics (or no sub-topics yet)
+                const subtopicCount = allTopics[selectedTopic] ? allTopics[selectedTopic].length : 0;
+                if (subtopicCount < 5) {
+                    const newOption = document.createElement('option');
+                    newOption.value = '__new__';
+                    newOption.textContent = '+ Create New Sub-topic';
+                    subtopicSelect.appendChild(newOption);
+                }
+            } else {
+                subtopicSelect.disabled = true;
+            }
+        }
+
+        // Topic creation functions
+        async function createTopicNow(topicName) {
+            try {
+                const response = await fetch('/api/topics', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ name: topicName })
+                });
+                
+                if (response.ok) {
+                    await loadTopics(); // Refresh topics
+                    return true;
+                } else {
+                    const errorData = await response.json();
+                    alert(errorData.detail || 'Error creating topic');
+                    return false;
+                }
+            } catch (error) {
+                console.error('Error creating topic:', error);
+                alert('Error creating topic');
+                return false;
+            }
+        }
+
+        async function createSubtopicNow(topicName, subtopicName) {
+            try {
+                const response = await fetch(`/api/topics/${encodeURIComponent(topicName)}/subtopics`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ name: subtopicName })
+                });
+                
+                if (response.ok) {
+                    await loadTopics(); // Refresh topics
+                    return true;
+                } else {
+                    const errorData = await response.json();
+                    alert(errorData.detail || 'Error creating sub-topic');
+                    return false;
+                }
+            } catch (error) {
+                console.error('Error creating sub-topic:', error);
+                alert('Error creating sub-topic');
+                return false;
+            }
+        }
+
+        // Event listeners
+        topicSelect.addEventListener('change', async function() {
+            selectedTopic = this.value;
+            selectedSubtopic = '';
+            subtopicSelect.value = '';
+            
+            if (selectedTopic === '__new__') {
+                const newTopic = prompt('Enter new topic name:');
+                if (newTopic && newTopic.trim()) {
+                    const success = await createTopicNow(newTopic);
+                    if (success) {
+                        selectedTopic = newTopic.toLowerCase().trim();
+                        this.value = selectedTopic;
+                    } else {
+                        selectedTopic = '';
+                        this.value = '';
+                    }
+                } else {
+                    selectedTopic = '';
+                    this.value = '';
+                }
+            }
+            
+            updateSubtopicDropdown();
+            
+            // Reload conversations with new topic filter
+            await loadConversations(true);
+        });
+
+        subtopicSelect.addEventListener('change', async function() {
+            selectedSubtopic = this.value;
+            
+            if (selectedSubtopic === '__new__') {
+                const newSubtopic = prompt('Enter new sub-topic name:');
+                if (newSubtopic && newSubtopic.trim()) {
+                    const success = await createSubtopicNow(selectedTopic, newSubtopic);
+                    if (success) {
+                        selectedSubtopic = newSubtopic.toLowerCase().trim();
+                        this.value = selectedSubtopic;
+                    } else {
+                        selectedSubtopic = '';
+                        this.value = '';
+                    }
+                } else {
+                    selectedSubtopic = '';
+                    this.value = '';
+                }
+            }
+            
+            // Reload conversations with new subtopic filter
+            await loadConversations(true);
+        });
+
+        newChatBtn.addEventListener('click', showWelcomeScreen);
+
+        // Topic modal functionality
+        function openTopicModal() {
+            // Populate modal dropdowns with current topics
+            populateModalTopicDropdowns();
+            
+            // Set current selections
+            modalTopicSelect.value = currentConversationTopic || '';
+            updateModalSubtopicDropdown();
+            modalSubtopicSelect.value = currentConversationSubtopic || '';
+            
+            topicModal.classList.add('show');
+        }
+
+        function closeTopicModal() {
+            topicModal.classList.remove('show');
+        }
+
+        function populateModalTopicDropdowns() {
+            modalTopicSelect.innerHTML = '<option value="">No topic</option>';
+            
+            if (Object.keys(allTopics).length > 0) {
+                Object.keys(allTopics).forEach(topic => {
+                    const option = document.createElement('option');
+                    option.value = topic;
+                    option.textContent = topic;
+                    modalTopicSelect.appendChild(option);
+                });
+            }
+            
+            const newOption = document.createElement('option');
+            newOption.value = '__new__';
+            newOption.textContent = '+ Create New Topic';
+            modalTopicSelect.appendChild(newOption);
+        }
+
+        function updateModalSubtopicDropdown() {
+            modalSubtopicSelect.innerHTML = '<option value="">No sub-topic</option>';
+            
+            const selectedTopic = modalTopicSelect.value;
+            
+            if (selectedTopic && selectedTopic !== '__new__' && allTopics[selectedTopic]) {
+                modalSubtopicSelect.disabled = false;
+                
+                allTopics[selectedTopic].forEach(subtopic => {
+                    const option = document.createElement('option');
+                    option.value = subtopic;
+                    option.textContent = subtopic;
+                    modalSubtopicSelect.appendChild(option);
+                });
+                
+                if (allTopics[selectedTopic].length < 5) {
+                    const newOption = document.createElement('option');
+                    newOption.value = '__new__';
+                    newOption.textContent = '+ Create New Sub-topic';
+                    modalSubtopicSelect.appendChild(newOption);
+                }
+            } else {
+                modalSubtopicSelect.disabled = true;
+            }
+        }
+
+        async function saveTopicChanges() {
+            if (!currentConversationId) return;
+            
+            let topic = modalTopicSelect.value;
+            let subTopic = modalSubtopicSelect.value;
+            
+            // Handle new topic creation
+            if (topic === '__new__') {
+                const newTopic = prompt('Enter new topic name:');
+                if (newTopic && newTopic.trim()) {
+                    const success = await createTopicNow(newTopic);
+                    if (success) {
+                        topic = newTopic.toLowerCase().trim();
+                    } else {
+                        return;
+                    }
+                } else {
+                    return;
+                }
+            }
+            
+            // Handle new sub-topic creation
+            if (subTopic === '__new__' && topic) {
+                const newSubtopic = prompt('Enter new sub-topic name:');
+                if (newSubtopic && newSubtopic.trim()) {
+                    const success = await createSubtopicNow(topic, newSubtopic);
+                    if (success) {
+                        subTopic = newSubtopic.toLowerCase().trim();
+                    } else {
+                        return;
+                    }
+                } else {
+                    return;
+                }
+            }
+            
+            // Update conversation topic
+            try {
+                const response = await fetch(`/api/conversations/${currentConversationId}/topic`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        topic: topic || null,
+                        sub_topic: subTopic || null
+                    })
+                });
+                
+                if (response.ok) {
+                    currentConversationTopic = topic || null;
+                    currentConversationSubtopic = subTopic || null;
+                    updateTopicDisplayText();
+                    closeTopicModal();
+                    loadConversations(true); // Refresh conversation list
+                } else {
+                    const errorData = await response.json();
+                    alert(errorData.detail || 'Error updating topic');
+                }
+            } catch (error) {
+                console.error('Error updating topic:', error);
+                alert('Error updating topic');
+            }
+        }
+
+        // Topic modal event listeners
+        editTopicBtn.addEventListener('click', openTopicModal);
+        cancelTopicBtn.addEventListener('click', closeTopicModal);
+        saveTopicBtn.addEventListener('click', saveTopicChanges);
+        
+        removeTopicBtn.addEventListener('click', async () => {
+            if (!currentConversationId) return;
+            
+            try {
+                const response = await fetch(`/api/conversations/${currentConversationId}/topic`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        topic: null,
+                        sub_topic: null
+                    })
+                });
+                
+                if (response.ok) {
+                    currentConversationTopic = null;
+                    currentConversationSubtopic = null;
+                    updateTopicDisplayText();
+                    closeTopicModal();
+                    loadConversations(true);
+                } else {
+                    const errorData = await response.json();
+                    alert(errorData.detail || 'Error removing topic');
+                }
+            } catch (error) {
+                console.error('Error removing topic:', error);
+                alert('Error removing topic');
+            }
+        });
+
+        modalTopicSelect.addEventListener('change', updateModalSubtopicDropdown);
+
+        // Close modal when clicking outside
+        topicModal.addEventListener('click', (e) => {
+            if (e.target === topicModal) {
+                closeTopicModal();
+            }
+        });
+
+        newChatBtn.addEventListener('click', showWelcomeScreen);
+
+        // User management functions
+        async function loadUserName() {
+            try {
+                const response = await fetch('/api/user/name');
+                if (response.ok) {
+                    const data = await response.json();
+                    userName = data.first_name || '';
+                    
+                    // Update UF Score badge
+                    const ufScoreValue = document.getElementById('ufScoreValue');
+                    if (ufScoreValue && data.feedback_score !== undefined) {
+                        ufScoreValue.textContent = data.feedback_score;
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading user name:', error);
+            }
+        }
+
+        // File management functions
+        async function loadFiles() {
+            try {
+                const response = await fetch('/api/user-files');
+                if (response.ok) {
+                    userFiles = await response.json();
+                    filteredFiles = [...userFiles];
+                    updateFileDropdown();
+                    updateFileSearchDisplay();
+                }
+            } catch (error) {
+                console.error('Error loading files:', error);
+            }
+        }
+
+        function updateFileDropdown() {
+            fileDropdown.innerHTML = '';
+            
+            if (filteredFiles.length === 0) {
+                const emptyOption = document.createElement('div');
+                emptyOption.className = 'model-option';
+                emptyOption.innerHTML = '<div style="opacity: 0.7;">No files uploaded</div>';
+                fileDropdown.appendChild(emptyOption);
+                return;
+            }
+            
+            filteredFiles.forEach(file => {
+                const option = document.createElement('div');
+                option.className = 'model-option';
+                const date = new Date(file.uploaded_at).toLocaleDateString();
+                option.innerHTML = `
+                    <div class="model-name">${file.filename}</div>
+                    <div class="model-id">${file.file_type} • ${date}</div>
+                `;
+                option.addEventListener('click', () => selectFile(file));
+                fileDropdown.appendChild(option);
+            });
+        }
+
+        function updateFileSearchDisplay() {
+            if (userFiles.length === 0) {
+                fileSearch.value = 'No files';
+            } else {
+                fileSearch.value = `${userFiles.length} files available`;
+            }
+        }
+
+        function selectFile(file) {
+            chatInput.value = `/view ${file.filename}`;
+            fileDropdown.style.display = 'none';
+            chatInput.focus();
+        }
+
+        // Sidebar toggle functionality
+        function toggleSidebar() {
+            sidebarOpen = !sidebarOpen;
+            updateSidebarState();
+        }
+
+        function updateSidebarState() {
+            const isMobile = window.innerWidth <= 768;
+            
+            // Unified overlay behavior for all screen sizes
+            if (sidebarOpen) {
+                sidebar.classList.add('open');
+                sidebar.classList.remove('collapsed');
+                sidebarOverlay.classList.add('active');
+            } else {
+                sidebar.classList.remove('open');
+                sidebar.classList.add('collapsed');
+                sidebarOverlay.classList.remove('active');
+            }
+            
+            // Chat container always stays at full width
+            chatContainer.style.marginLeft = '0';
+        }
+
+        // Event listeners for sidebar
+        sidebarToggle.addEventListener('click', toggleSidebar);
+        sidebarOverlay.addEventListener('click', () => {
+            sidebarOpen = false;
+            updateSidebarState();
+        });
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            const wasMobile = window.innerWidth <= 768;
+            updateSidebarState();
+        });
+
+        // Slash command suggestion functions
+        function showSlashSuggestions(inputText) {
+            const query = inputText.slice(1).toLowerCase(); // Remove the '/' and lowercase
+            const filteredCommands = slashCommands.filter(cmd => 
+                cmd.cmd.slice(1).toLowerCase().startsWith(query)
+            );
+            
+            if (filteredCommands.length === 0) {
+                hideSlashSuggestions();
+                return;
+            }
+            
+            slashSuggestions.innerHTML = '';
+            filteredCommands.forEach((command, index) => {
+                const item = document.createElement('div');
+                item.className = 'slash-command-item';
+                item.innerHTML = `
+                    <div class="slash-command-name">${command.cmd}</div>
+                    <div class="slash-command-desc">${command.desc}</div>
+                    <div class="slash-command-usage">${command.usage}</div>
+                `;
+                
+                item.addEventListener('click', () => selectSlashCommand(command));
+                slashSuggestions.appendChild(item);
+            });
+            
+            slashSuggestions.classList.add('active');
+            highlightedSuggestion = -1;
+        }
+        
+        function hideSlashSuggestions() {
+            slashSuggestions.classList.remove('active');
+            highlightedSuggestion = -1;
+        }
+        
+        function selectSlashCommand(command) {
+            chatInput.value = command.usage;
+            hideSlashSuggestions();
+            chatInput.focus();
+            // Position cursor at end if it's a template command
+            if (command.usage.includes(' ')) {
+                const cursorPos = command.usage.length;
+                chatInput.setSelectionRange(cursorPos, cursorPos);
+            }
+        }
+        
+        function navigateSuggestions(direction) {
+            const items = slashSuggestions.querySelectorAll('.slash-command-item');
+            if (items.length === 0) return;
+            
+            // Remove previous highlight
+            if (highlightedSuggestion >= 0 && highlightedSuggestion < items.length) {
+                items[highlightedSuggestion].classList.remove('highlighted');
+            }
+            
+            // Update highlight index
+            if (direction === 'down') {
+                highlightedSuggestion = (highlightedSuggestion + 1) % items.length;
+            } else {
+                highlightedSuggestion = highlightedSuggestion <= 0 ? items.length - 1 : highlightedSuggestion - 1;
+            }
+            
+            // Add new highlight
+            items[highlightedSuggestion].classList.add('highlighted');
+        }
+        
+        function selectHighlightedSuggestion() {
+            const items = slashSuggestions.querySelectorAll('.slash-command-item');
+            if (highlightedSuggestion >= 0 && highlightedSuggestion < items.length) {
+                const commandName = items[highlightedSuggestion].querySelector('.slash-command-name').textContent;
+                const command = slashCommands.find(cmd => cmd.cmd === commandName);
+                if (command) {
+                    selectSlashCommand(command);
+                }
+            }
+        }
+
+        // Conversation menu functions
+        function toggleConversationMenu(event, conversationId) {
+            event.stopPropagation();
+            
+            // Close all other menus
+            document.querySelectorAll('.dropdown-menu').forEach(menu => {
+                if (menu.id !== `menu-${conversationId}`) {
+                    menu.classList.remove('show');
+                }
+            });
+            
+            // Toggle current menu
+            const menu = document.getElementById(`menu-${conversationId}`);
+            menu.classList.toggle('show');
+        }
+
+        function showDeleteConfirmation(conversationId) {
+            conversationToDelete = conversationId;
+            deleteModal.classList.add('show');
+            
+            // Close dropdown menu
+            document.getElementById(`menu-${conversationId}`).classList.remove('show');
+        }
+
+        function hideDeleteModal() {
+            deleteModal.classList.remove('show');
+            conversationToDelete = null;
+        }
+
+        async function deleteConversation() {
+            if (!conversationToDelete) return;
+            
+            try {
+                confirmDeleteBtn.disabled = true;
+                confirmDeleteBtn.textContent = 'Deleting...';
+                
+                const response = await fetch(`/api/conversations/${conversationToDelete}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response.ok) {
+                    // Remove from conversations array
+                    conversations = conversations.filter(conv => conv.id !== conversationToDelete);
+                    
+                    // If deleted conversation was current, clear chat
+                    if (currentConversationId === conversationToDelete) {
+                        currentConversationId = null;
+                        chatMessages.innerHTML = '';
+                        // Show welcome screen back
+                        showWelcomeScreen();
+                        topicDisplayText.textContent = 'No topic assigned';
+                    }
+                    
+                    // Re-render conversations list
+                    renderConversations();
+                    
+                    hideDeleteModal();
+                } else {
+                    const error = await response.json();
+                    alert(`Failed to delete conversation: ${error.detail}`);
+                }
+            } catch (error) {
+                console.error('Error deleting conversation:', error);
+                alert('Failed to delete conversation. Please try again.');
+            } finally {
+                confirmDeleteBtn.disabled = false;
+                confirmDeleteBtn.textContent = 'Delete';
+            }
+        }
+
+        // Delete modal event listeners
+        cancelDeleteBtn.addEventListener('click', hideDeleteModal);
+        confirmDeleteBtn.addEventListener('click', deleteConversation);
+        deleteModal.addEventListener('click', (e) => {
+            if (e.target === deleteModal) {
+                hideDeleteModal();
+            }
+        });
+
+        // Topic deletion modal event listeners
+        cancelTopicDeleteBtn.addEventListener('click', hideTopicDeleteModal);
+        confirmTopicDeleteBtn.addEventListener('click', confirmTopicDeletion);
+        document.getElementById('topicDeleteModal').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) {
+                hideTopicDeleteModal();
+            }
+        });
+
+        // File search event listeners
+        fileSearch.addEventListener('click', () => {
+            fileDropdown.style.display = fileDropdown.style.display === 'block' ? 'none' : 'block';
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.file-search-container')) {
+                fileDropdown.style.display = 'none';
+            }
+            if (!e.target.closest('.chat-input-container')) {
+                hideSlashSuggestions();
+            }
+            if (!e.target.closest('.conversation-menu')) {
+                document.querySelectorAll('.dropdown-menu').forEach(menu => {
+                    menu.classList.remove('show');
+                });
+            }
+            if (!e.target.closest('.tools-container') && toolsMenuOpen) {
+                closeToolsMenu();
+            }
+        });
+
+        // Topic deletion modal functions
+        function showTopicDeleteModal(deletionInfo) {
+            const modal = document.getElementById('topicDeleteModal');
+            const title = document.getElementById('topicDeleteTitle');
+            const topicSpan = document.getElementById('deleteTopic');
+            const subtopicRow = document.getElementById('deleteSubtopicRow');
+            const subtopicSpan = document.getElementById('deleteSubtopic');
+            const subtopicCountRow = document.getElementById('deleteSubtopicCountRow');
+            const conversationCount = document.getElementById('deleteConversationCount');
+            const subtopicCount = document.getElementById('deleteSubtopicCount');
+            const totalMessages = document.getElementById('deleteTotalMessages');
+            
+            // Store deletion info for confirmation
+            modal.dataset.deletionInfo = JSON.stringify(deletionInfo);
+            
+            // Update modal content based on deletion type
+            if (deletionInfo.type === 'topic') {
+                title.textContent = 'Delete Topic';
+                topicSpan.textContent = deletionInfo.topic;
+                subtopicRow.style.display = 'none';
+                subtopicCountRow.style.display = 'block';
+                subtopicCount.textContent = deletionInfo.subtopic_count;
+            } else {
+                title.textContent = 'Delete Subtopic';
+                topicSpan.textContent = deletionInfo.topic;
+                subtopicRow.style.display = 'block';
+                subtopicSpan.textContent = deletionInfo.subtopic;
+                subtopicCountRow.style.display = 'none';
+            }
+            
+            conversationCount.textContent = deletionInfo.conversation_count;
+            totalMessages.textContent = deletionInfo.total_messages;
+            
+            modal.style.display = 'flex';
+        }
+
+        function hideTopicDeleteModal() {
+            document.getElementById('topicDeleteModal').style.display = 'none';
+        }
+
+        async function confirmTopicDeletion() {
+            const modal = document.getElementById('topicDeleteModal');
+            const deletionInfo = JSON.parse(modal.dataset.deletionInfo);
+            
+            try {
+                let url;
+                if (deletionInfo.type === 'topic') {
+                    url = `/api/topics/${encodeURIComponent(deletionInfo.topic)}`;
+                } else {
+                    url = `/api/topics/${encodeURIComponent(deletionInfo.topic)}/subtopics/${encodeURIComponent(deletionInfo.subtopic)}`;
+                }
+                
+                const response = await fetch(url, {
+                    method: 'DELETE'
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    hideTopicDeleteModal();
+                    
+                    // Show success message
+                    addMessage(`✅ ${result.message}`, 'assistant');
+                    
+                    // Refresh topics and conversations
+                    await loadTopics();
+                    await loadConversations(true);
+                } else {
+                    const error = await response.json();
+                    addMessage(`❌ ${error.detail}`, 'assistant');
+                }
+            } catch (error) {
+                console.error('Error deleting:', error);
+                addMessage('❌ Error during deletion. Please try again.', 'assistant');
+            }
+            
+            hideTopicDeleteModal();
+        }
+
+        // Show welcome screen
+        function showWelcomeScreen() {
+            currentConversationId = null;
+            chatMessages.innerHTML = `
+                <div class="welcome-screen" id="welcomeScreen">
+                    <img class="welcome-image" src="/static/neurolm-welcome-image.png" alt="NeuroLM Welcome" />
+                    <div class="welcome-text">
+                        <h2>Welcome Back</h2>
+                        <p id="welcomeUserName">${userName || 'User'}</p>
+                    </div>
+                </div>
+            `;
+            
+            // Update active conversation state
+            document.querySelectorAll('.conversation-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            
+            // Update topic display
+            topicDisplayText.textContent = 'No topic assigned';
+        }
+
+        // Initialize app
+        async function initializeApp() {
+            await loadModels();
+            await loadConversations(true);
+            await loadFiles();
+            await loadTopics();
+            await loadUserName();
+            
+            // Initialize sidebar state
+            updateSidebarState();
+            
+            // Initialize speech recognition
+            initializeSpeechRecognition();
+            
+            // Add event listeners for new functionality
+            toolsButton.addEventListener('click', toggleToolsMenu);
+            microphoneButton.addEventListener('click', () => {
+                if (isRecording) {
+                    stopRecording();
+                } else {
+                    startRecording();
+                }
+                closeToolsMenu();
+            });
+
+            // Add auto-resize functionality to textarea
+            chatInput.addEventListener('input', autoResizeTextarea);
+            chatInput.addEventListener('paste', () => {
+                setTimeout(autoResizeTextarea, 0);
+            });
+            
+            // If no current conversation, show welcome screen
+            if (!currentConversationId) {
+                showWelcomeScreen();
+            }
+            
+            // Initialize textarea height and focus input
+            autoResizeTextarea();
+            chatInput.focus();
+            
+            // Restore feedback states from localStorage
+            restoreFeedbackStates();
+        }
+
+        // Start the app
+        initializeApp();
+    </script>
+</body>
+</html>

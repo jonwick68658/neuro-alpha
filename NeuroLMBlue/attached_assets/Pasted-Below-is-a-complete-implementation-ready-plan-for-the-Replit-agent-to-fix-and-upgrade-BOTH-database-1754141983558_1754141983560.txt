@@ -1,0 +1,263 @@
+Below is a complete, implementation-ready plan for the Replit agent to fix and upgrade BOTH databases that store memory: PostgreSQL (primary content, embeddings, full-text search, vault secrets) and Neo4j Aura (graph memory and associations). It is designed for safe-by-default production deployment, idempotent migrations, dual “plan/apply” modes, least-privilege access, and resilient sync. It also incorporates recent lessons on AI agent safety around databases and production guardrails as highlighted in industry write-ups and guides [neon.com](https://neon.com/blog/how-to-add-a-postgres-database-to-your-replit-agent-project), [benzinga.com](https://www.benzinga.com/markets/tech/25/07/46538388/replit-ceo-apologizes-after-ai-coding-tool-wipes-core-database), [hindustantimes.com](https://www.hindustantimes.com/technology/scary-ai-incident-agent-deletes-data-tries-to-hide-the-truth-and-lies-101753190527662.html), and prior community lessons on safe agent-driven DB work. This plan is end-to-end; the agent can execute it without additional guidance.
+
+Scope
+- PostgreSQL: schema migration, extensions, indexes, FKs, RLS, roles, idempotency keys, maintenance jobs, health checks, and a migration runner with plan/apply and destructive-op blocking.
+- Neo4j Aura: constraints/indexes, Cypher migration runner with plan/apply, graph model, resilient outbox sync, health checks, and least-privilege configuration.
+- App-layer wiring: per-request user context for RLS, outbox worker, environment variables, and operator runbooks.
+
+Environment variables (create/update)
+- DATABASE_URL: production Postgres (uses `app_rw` role).
+- DEV_DATABASE_URL: development Postgres.
+- DB_ENV: production|development (default development).
+- DEPLOY_CONFIRM: YES required to apply migrations in production.
+- VAULT_MASTER_KEY, VAULT_KDF_ITERATIONS (default 300000).
+- NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD, NEO4J_DATABASE (optional, default neo4j).
+
+Part A: Migration runner (Postgres + Neo4j), with plan/apply and safety gates
+Implement a single CLI `./migrate` that supports:
+- Targets: `pg` and `neo4j`.
+- Modes: `--plan` (dry-run) and `--apply` (execute).
+- Production safety: `--apply` requires DB_ENV=production AND DEPLOY_CONFIRM=YES. Otherwise refuse.
+- Destructive-op guard for Postgres: when DB_ENV=production, scan SQL for disallowed statements and abort unless `--override-destructive` and an approval token are present. Disallow: DROP TABLE, DROP SCHEMA, TRUNCATE, DELETE without WHERE, ALTER TABLE DROP COLUMN. Always log and require explicit approval.
+- Bookkeeping: `schema_migrations` table (Postgres) and an equivalent `:Migration` node set (Neo4j) to record applied migrations (filename, checksum, applied_at).
+- Output: In plan mode, print ordered SQL/Cypher with checksums; in apply mode, wrap in transaction where safe. Neo4j statements execute sequentially.
+
+Part B: PostgreSQL migrations (complete set)
+Create files in `migrations/pg/` and apply in order.
+
+01_extensions.sql
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS unaccent;
+-- Enable if available at instance level (may require superuser/managed setting)
+-- CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
+02_conversations_messages.sql
+CREATE TABLE IF NOT EXISTS conversations (
+  id UUID PRIMARY KEY,
+  title TEXT,
+  topic TEXT,
+  sub_topic TEXT,
+  last_message TEXT,
+  message_count INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  is_active BOOLEAN DEFAULT TRUE
+);
+CREATE TABLE IF NOT EXISTS messages (
+  id UUID PRIMARY KEY,
+  conversation_id UUID NOT NULL,
+  message_type TEXT NOT NULL CHECK (message_type IN ('user','assistant','system')),
+  content TEXT NOT NULL,
+  idempotency_key TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  is_active BOOLEAN DEFAULT TRUE
+);
+-- FK + indexes for join and fast listing
+ALTER TABLE messages
+  ADD CONSTRAINT IF NOT EXISTS fk_messages_conversation
+  FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages (conversation_id);
+CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_topic ON conversations (topic, sub_topic);
+-- Idempotency (scope per-conversation)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_unique_idem
+  ON messages (conversation_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+
+03_fulltext.sql
+ALTER TABLE messages
+  ADD COLUMN IF NOT EXISTS ts tsvector
+  GENERATED ALWAYS AS (to_tsvector('english', unaccent(coalesce(content, '')))) STORED;
+CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages USING GIN (ts);
+
+04_embeddings.sql
+-- Adjust dimension for the embedding model you use (1536 as a default)
+CREATE TABLE IF NOT EXISTS messages_embeddings (
+  message_id UUID PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+  embedding vector(1536),
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_messages_embeddings_ivfflat
+  ON messages_embeddings USING ivfflat (embedding vector_cosine)
+  WITH (lists = 100);
+
+05_vault_rls.sql
+-- These tables are assumed to exist from your Secrets Vault implementation
+-- Enforce RLS; the app must SET app.current_user per request/session
+ALTER TABLE IF EXISTS user_secrets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS user_secret_salts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS secret_access_log ENABLE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE schemaname = 'public'
+      AND tablename = 'user_secrets' AND policyname = 'user_secrets_isolation'
+  ) THEN
+    CREATE POLICY user_secrets_isolation ON user_secrets
+      FOR SELECT USING (user_id = current_setting('app.current_user', true));
+  END IF;
+END$$;
+
+06_roles_privs.sql
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_rw') THEN
+    CREATE ROLE app_rw LOGIN PASSWORD '<SET-IN-SECRET>';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'migrator') THEN
+    CREATE ROLE migrator LOGIN PASSWORD '<SET-IN-SECRET>';
+  END IF;
+END$$;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT USAGE ON SCHEMA public TO app_rw;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_rw;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_rw;
+
+07_graph_outbox.sql
+-- For resilient Neo4j sync (outbox pattern)
+CREATE TABLE IF NOT EXISTS graph_outbox (
+  id UUID PRIMARY KEY,
+  event_type TEXT NOT NULL, -- e.g., 'conversation_upsert','message_upsert','feedback'
+  entity_id UUID NOT NULL,
+  payload JSONB NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending', -- pending, processing, done, deadletter
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_graph_outbox_status_created ON graph_outbox (status, created_at);
+
+Post-migration tasks (automated by runner after apply)
+- If `idx_messages_embeddings_ivfflat` was newly created, run:
+  ANALYZE messages_embeddings;
+- If large backfills occur, run:
+  VACUUM (ANALYZE) messages;
+  VACUUM (ANALYZE) messages_embeddings;
+
+Part C: Neo4j migrations (complete set)
+Create files in `migrations/neo4j/` with Cypher. Execute via the same `./migrate neo4j --plan/--apply`.
+
+01_constraints.cypher
+CREATE CONSTRAINT user_id IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE;
+CREATE CONSTRAINT conversation_id IF NOT EXISTS FOR (c:Conversation) REQUIRE c.id IS UNIQUE;
+CREATE CONSTRAINT message_id IF NOT EXISTS FOR (m:Message) REQUIRE m.id IS UNIQUE;
+
+02_indexes.cypher
+CREATE INDEX topic_name IF NOT EXISTS FOR (t:Topic) ON (t.name);
+CREATE INDEX subtopic_name IF NOT EXISTS FOR (s:SubTopic) ON (s.name);
+CREATE INDEX file_name IF NOT EXISTS FOR (f:File) ON (f.name);
+
+03_model.cypher
+// No destructive ops. Establish minimal shape and ready MERGE semantics.
+// Optionally, create stub nodes to warm caches (optional, usually skipped).
+
+04_feedback_edge.cypher
+// Create a sample constraint on feedback edge cardinality if needed via APOC/NODES (optional).
+// Otherwise, this file is a placeholder to record that feedback edges are a supported relation.
+
+Part D: App-layer wiring
+1) Per-request user context for RLS
+- On acquiring a DB connection for an authenticated request: execute `SET app.current_user = '<user-uuid>'`.
+- Ensure this is done per connection (for poolers, use session hooks).
+
+2) Outbox writer (Postgres)
+- On conversation create/update in Postgres, insert an outbox row:
+  - event_type: 'conversation_upsert'
+  - entity_id: conversation.id
+  - payload: { user_id, conversation_id, title, topic, sub_topic, updated_at }
+- On message create (user or assistant), insert:
+  - event_type: 'message_upsert'
+  - entity_id: message.id
+  - payload: { conversation_id, message_id, message_type, created_at }
+- On feedback submission, insert:
+  - event_type: 'feedback'
+  - entity_id: message.id
+  - payload: { user_id, message_id, feedback_type, score, at }
+
+3) Outbox worker (Neo4j sync)
+- A periodic worker reads `graph_outbox WHERE status='pending' ORDER BY created_at LIMIT N`, marks `processing`, and attempts the upsert into Neo4j with exponential backoff and max attempts (e.g., 10). On success, set `done`; on repeated failure, set `deadletter` and record `last_error`.
+- Cypher upserts:
+  a) Conversation + topic/subtopic
+     MERGE (u:User {id: $user_id})
+     MERGE (c:Conversation {id: $conversation_id})
+     ON CREATE SET c.title = $title, c.updated_at = datetime()
+     ON MATCH SET  c.title = coalesce($title, c.title), c.updated_at = datetime()
+     MERGE (u)-[:OWNS]->(c)
+     WITH c, $topic AS topicName, $sub_topic AS sub
+     OPTIONAL MATCH (c)-[r:HAS_TOPIC]->(:Topic) DELETE r
+     FOREACH (_ IN CASE WHEN topicName IS NULL OR topicName = '' THEN [] ELSE [1] END |
+       MERGE (t:Topic {name: topicName})
+       MERGE (c)-[:HAS_TOPIC]->(t)
+       FOREACH (__ IN CASE WHEN sub IS NULL OR sub = '' THEN [] ELSE [1] END |
+         MERGE (s:SubTopic {name: sub})
+         MERGE (t)-[:HAS_SUBTOPIC]->(s)
+       )
+     );
+  b) Message linkage
+     MERGE (c:Conversation {id: $conversation_id})
+     MERGE (m:Message {id: $message_id})
+     ON CREATE SET m.type = $message_type, m.created_at = datetime()
+     MERGE (c)-[:HAS_MESSAGE]->(m);
+  c) Feedback
+     MERGE (u:User {id: $user_id})
+     MERGE (m:Message {id: $message_id})
+     MERGE (u)-[f:GAVE_FEEDBACK]->(m)
+     SET f.type = $feedback_type, f.score = $score, f.at = datetime();
+
+- All MERGE operations are idempotent.
+
+4) Idempotent message writes in API
+- Accept optional `Idempotency-Key` header on message creation endpoints.
+- If provided, populate `messages.idempotency_key` and rely on the unique index to prevent duplicates per conversation.
+
+5) Health endpoints
+- `/health/db`:
+  - SELECT now();
+  - Check IVFFlat index exists in `pg_indexes` for `messages_embeddings`.
+  - Count anomalies: SELECT COUNT(*) FROM messages WHERE content IS NULL OR content = '';
+  - Optional: check `pg_stat_statements` is enabled (if privileges permit).
+- `/health/graph`:
+  - Run `RETURN 1 AS ok;`
+  - Run small counts: `MATCH (c:Conversation) RETURN count(c) LIMIT 1`, same for `Message`.
+  - Verify constraints exist via `SHOW CONSTRAINTS`.
+
+Part E: Maintenance and operations
+1) Nightly maintenance job
+- Postgres:
+  - VACUUM (ANALYZE) messages;
+  - VACUUM (ANALYZE) messages_embeddings;
+  - Optionally REINDEX tables if bloat exceeds threshold (monitor via `pg_stat_all_indexes`).
+- Tune IVFFlat `lists` after data grows. Initial 100 is fine; scale toward sqrt(n)-style heuristic as corpus grows. Rebuild index off-hours if tuning.
+
+2) Backups and restore drills
+- Verify automated backups for both Postgres and Neo4j Aura. Document a restore drill (quarterly).
+- Keep a runbook for switching `DATABASE_URL` to a restored instance if needed and re-hydrating Neo4j from Postgres with the outbox replayer.
+
+3) Operator runbook
+- Migrations:
+  - Plan: `./migrate pg --plan` and `./migrate neo4j --plan`.
+  - Apply in staging: `./migrate pg --apply`, `./migrate neo4j --apply`.
+  - Apply in production: set `DB_ENV=production` and `DEPLOY_CONFIRM=YES`, then run `--apply`.
+- If a migration fails:
+  - Inspect error, fix migration, re-run `--plan` and `--apply`.
+  - Never run destructive SQL in production without manual, reviewed SQL and explicit overrides.
+- Rotating `VAULT_MASTER_KEY` requires a re-encryption process; plan a separate maintenance task for that when needed.
+
+Part F: Notes and references for the agent
+- Replit-agent DB safety: Given high-profile incidents with AI agents deleting production databases, we enforce plan/apply gates, destructive-op blocking, and role separation to avoid repeat scenarios [benzinga.com](https://www.benzinga.com/markets/tech/25/07/46538388/replit-ceo-apologizes-after-ai-coding-tool-wipes-core-database), [hindustantimes.com](https://www.hindustantimes.com/technology/scary-ai-incident-agent-deletes-data-tries-to-hide-the-truth-and-lies-101753190527662.html).
+- Postgres + agent flows: Agent-managed schema and UI changes should be done through explicit migration definitions and reviewable deltas, similar to patterns discussed in agent + Postgres guidance [neon.com](https://neon.com/blog/how-to-add-a-postgres-database-to-your-replit-agent-project).
+
+Deliverables checklist for the Replit agent
+- Build `./migrate` CLI supporting Postgres and Neo4j, with plan/apply, production gates, destructive-op guard, and migration bookkeeping (files + checksums).
+- Add and apply Postgres migrations 01–07.
+- Add and apply Neo4j migrations 01–04.
+- Implement outbox writer (API layer) and outbox worker (background job).
+- Add `/health/db` and `/health/graph` endpoints with the described checks.
+- Ensure app sets `SET app.current_user = '<user-uuid>'` per request/session.
+- Configure nightly maintenance job for VACUUM/ANALYZE and a procedure to tune IVFFlat lists later.
+- Verify least-privilege credentials in env: `app_rw` for runtime, `migrator` only for migrations.
+
+This is the full, self-contained plan. If you want, I can also provide a ready-to-run Python migration runner scaffold that implements the plan/apply modes, checksums, and destructive-op guards for both Postgres and Neo4j.

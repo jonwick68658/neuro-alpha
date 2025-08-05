@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>NeuroLM Chat</title>
+  <meta name="color-scheme" content="dark light" />
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js" defer></script>
+  <style>
+    :root {
+      --primary: #4f46e5;
+      --bg: #000000;
+      --bg-2: #111111;
+      --card: #1b1b1b;
+      --text: #f7f7f7;
+      --muted: #9ca3af;
+      --border: #2b2b2b;
+      --danger: #dc2626;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Inter,system-ui,sans-serif; }
+    .wrap { display: grid; grid-template-rows: auto 1fr auto; height: 100%; }
+    header { display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border-bottom:1px solid var(--border); background: var(--bg-2); }
+    header h1 { margin:0; font-size:16px; }
+    .chat { overflow:auto; padding:16px; }
+    .message { max-width: 900px; margin: 8px auto; padding: 12px; border-radius: 10px; background: var(--card); line-height: 1.55; }
+    .message.user { background: #2b2b44; }
+    .message.assistant { background: var(--card); }
+    .thinking { display: inline-flex; align-items:center; gap:8px; padding:8px 10px; border-radius: 8px; background: #141414; border-left: 3px solid var(--primary); opacity: .9; }
+    .dots { display:inline-flex; gap:3px; }
+    .dot { width:6px; height:6px; border-radius:50%; background: var(--primary); animation: blink 1.2s infinite ease-in-out; }
+    .dot:nth-child(2){ animation-delay:.2s; } .dot:nth-child(3){ animation-delay:.4s; }
+    @keyframes blink { 0%,60%,100%{opacity:.4; transform: translateY(0);} 30%{opacity:1; transform: translateY(-2px);} }
+    .input { padding: 12px; border-top:1px solid var(--border); background: linear-gradient(180deg, rgba(0,0,0,.2), rgba(0,0,0,.9)); }
+    .row { max-width: 900px; margin: 0 auto; display:grid; grid-template-columns: 1fr auto; gap:8px; }
+    textarea { width: 100%; background: #0f0f0f; color: var(--text); border:1px solid var(--border); border-radius:10px; padding:10px; resize:none; min-height:44px; max-height:160px; outline:none; }
+    button { background: var(--primary); color: #fff; border:0; border-radius:10px; padding:10px 12px; cursor:pointer; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    pre { background:#0e0e0e; border:1px solid var(--border); border-radius:8px; padding:1rem; overflow:auto; }
+    a { color:#93c5fd; text-decoration:none; }
+    a:hover { text-decoration:underline; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>NeuroLM Chat</h1>
+      <div style="font-size:.85rem; color:var(--muted)">Streaming enabled</div>
+    </header>
+
+    <main id="chat" class="chat" aria-live="polite" aria-busy="false">
+      <div class="message assistant">
+        Hello! Streaming is enabled. Ask me anything.
+      </div>
+    </main>
+
+    <footer class="input">
+      <div class="row">
+        <textarea id="msg" placeholder="Type your message..."></textarea>
+        <button id="send">Send</button>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    // Minimal state
+    let currentConversationId = null;
+    let abortCurrent = null;
+
+    // Markdown safe render
+    function renderMarkdown(md) {
+      const html = (window.marked ? marked.parse(md || '') : (md||''));
+      const clean = (window.DOMPurify ? DOMPurify.sanitize(html) : html);
+      const tmp = document.createElement('div'); tmp.innerHTML = clean;
+      tmp.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'nofollow noopener noreferrer'; });
+      return tmp.innerHTML;
+    }
+
+    function addMessage(role, content) {
+      const d = document.createElement('div');
+      d.className = 'message ' + role;
+      if (role === 'assistant') d.innerHTML = renderMarkdown(content);
+      else d.textContent = content;
+      document.getElementById('chat').appendChild(d);
+      document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
+      return d;
+    }
+
+    function addThinking() {
+      const d = document.createElement('div');
+      d.className = 'message assistant';
+      d.innerHTML = `<div class="thinking"><span>Thinking</span><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>`;
+      d.id = 'thinking';
+      document.getElementById('chat').appendChild(d);
+      document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
+      return d;
+    }
+    function removeThinking() { const t = document.getElementById('thinking'); if (t) t.remove(); }
+
+    // Robust SSE line parser (accepts both {"delta": "..."} and OpenRouter-like frames)
+    function extractDelta(obj) {
+      if (!obj || typeof obj !== 'object') return null;
+      if (typeof obj.delta === 'string') return obj.delta;
+      // OpenRouter-style variants: sometimes nested in { type, data }, or event-based payloads
+      if (obj.data && typeof obj.data.delta === 'string') return obj.data.delta;
+      if (typeof obj.text === 'string') return obj.text;
+      if (obj.choices && obj.choices[0]?.delta?.content) return obj.choices[0].delta.content;
+      // Fallback: some providers send { content: "..." } increments
+      if (typeof obj.content === 'string') return obj.content;
+      return null;
+    }
+
+    async function streamChat(payload) {
+      const controller = new AbortController();
+      abortCurrent = () => controller.abort();
+
+      const res = await fetch('/api/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+
+      if (!res.ok) {
+        const t = await res.text().catch(()=>'');
+        throw new Error(`HTTP ${res.status} ${t}`);
+      }
+      if (!res.body) throw new Error('No response body');
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let fullText = '';
+      let assistantNode = addMessage('assistant', ''); // live-updated
+      const chat = document.getElementById('chat');
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse by newline; tolerate CRLF
+        while (true) {
+          const nl = buffer.indexOf('\n');
+          if (nl === -1) break;
+          let line = buffer.slice(0, nl);
+          buffer = buffer.slice(nl + 1);
+          line = line.trim();
+          if (!line) continue;
+          if (line.startsWith(':')) continue; // comment/heartbeat
+
+          if (!line.startsWith('data:')) continue;
+          const data = line.slice(5).trim();
+          if (data === '[DONE]') { buffer = ''; break; }
+
+          try {
+            const obj = JSON.parse(data);
+            const delta = extractDelta(obj);
+            if (typeof delta === 'string' && delta.length) {
+              fullText += delta;
+              assistantNode.innerHTML = renderMarkdown(fullText);
+              chat.scrollTop = chat.scrollHeight;
+              if (obj.conversation_id && !currentConversationId) {
+                currentConversationId = obj.conversation_id;
+              }
+            }
+          } catch {
+            // non-JSON payloads: treat as plain text
+            if (data && data !== '[DONE]') {
+              fullText += data;
+              assistantNode.innerHTML = renderMarkdown(fullText);
+              chat.scrollTop = chat.scrollHeight;
+            }
+          }
+        }
+      }
+      return { text: fullText };
+    }
+
+    async function sendMessage() {
+      const ta = document.getElementById('msg');
+      const btn = document.getElementById('send');
+      const text = (ta.value || '').trim();
+      if (!text) return;
+
+      // UI disable
+      btn.disabled = true; ta.disabled = true;
+
+      // User bubble
+      addMessage('user', text);
+      ta.value = ''; resize();
+
+      // Thinking indicator (non-blocking)
+      addThinking();
+
+      try {
+        const payload = { message: text, conversation_id: currentConversationId };
+        const result = await streamChat(payload);
+        // success path (nothing else to do)
+      } catch (err) {
+        addMessage('assistant', 'Sorry, there was a streaming error. Please try again.\n\n' + String(err?.message || err));
+      } finally {
+        removeThinking();
+        btn.disabled = false; ta.disabled = false; ta.focus();
+        abortCurrent = null;
+      }
+    }
+
+    // UI wiring
+    document.getElementById('send').addEventListener('click', sendMessage);
+    document.getElementById('msg').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    });
+
+    function resize() {
+      const ta = document.getElementById('msg');
+      ta.style.height = 'auto';
+      ta.style.height = Math.min(160, Math.max(44, ta.scrollHeight)) + 'px';
+    }
+    document.getElementById('msg').addEventListener('input', resize);
+    window.addEventListener('load', () => { resize(); });
+
+    // Optional: expose stop for future UI if needed
+    window.stopStreaming = () => { if (abortCurrent) abortCurrent(); };
+  </script>
+</body>
+</html>

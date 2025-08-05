@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <linearGradient id="fileGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="25%" style="stop-color:#764ba2;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#a855f7;stop-opacity:1" />
+      <stop offset="75%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge> 
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- File body -->
+  <path d="M50 30 L130 30 L170 70 L170 170 L50 170 Z" fill="none" stroke="url(#fileGradient)" stroke-width="4" opacity="0.8" filter="url(#glow)"/>
+  
+  <!-- File corner -->
+  <path d="M130 30 L130 70 L170 70" fill="none" stroke="url(#fileGradient)" stroke-width="3" opacity="0.9" filter="url(#glow)"/>
+  
+  <!-- File lines -->
+  <line x1="70" y1="90" x2="140" y2="90" stroke="url(#fileGradient)" stroke-width="2" opacity="0.6" filter="url(#glow)"/>
+  <line x1="70" y1="110" x2="150" y2="110" stroke="url(#fileGradient)" stroke-width="2" opacity="0.6" filter="url(#glow)"/>
+  <line x1="70" y1="130" x2="130" y2="130" stroke="url(#fileGradient)" stroke-width="2" opacity="0.6" filter="url(#glow)"/>
+  <line x1="70" y1="150" x2="145" y2="150" stroke="url(#fileGradient)" stroke-width="2" opacity="0.6" filter="url(#glow)"/>
+  
+  <!-- Plus sign for integration -->
+  <circle cx="140" cy="140" r="15" fill="none" stroke="url(#fileGradient)" stroke-width="2" opacity="0.8" filter="url(#glow)"/>
+  <line x1="135" y1="140" x2="145" y2="140" stroke="url(#fileGradient)" stroke-width="2" opacity="0.9" filter="url(#glow)"/>
+  <line x1="140" y1="135" x2="140" y2="145" stroke="url(#fileGradient)" stroke-width="2" opacity="0.9" filter="url(#glow)"/>
+</svg>

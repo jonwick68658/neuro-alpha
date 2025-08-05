@@ -1,0 +1,241 @@
+<!-- File: login.html (form-based, aligned to existing backend) -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>NeuroLM • Sign in</title>
+  <meta name="color-scheme" content="dark light">
+  <meta name="description" content="Secure sign in to NeuroLM">
+  <style>
+    :root{
+      --primary:#4f46e5; --primary-2:#4338ca; --accent:#ff7d4d;
+      --bg:#000000; --bg-2:#111111; --bg-3:#1a1a1a; --card:#222222;
+      --text:#f7f7f7; --muted:#9ca3af; --border:#333333;
+      --success:#16a34a; --danger:#dc2626; --warning:#d97706;
+      --shadow:0 20px 50px rgba(0,0,0,0.55); --radius:20px;
+      --focus:0 0 0 2px rgba(79,70,229,.65)
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,system-ui,sans-serif;background:var(--bg);color:var(--text)}
+    a{color:#93c5fd;text-decoration:none} a:hover{text-decoration:underline}
+
+    .background-pattern{
+      position:fixed; inset:0;
+      background-image:url('/static/neural-brain-logo.png');
+      background-repeat:no-repeat; background-position:center; background-size:40%;
+      opacity:.05; filter:blur(1px); z-index:0;
+    }
+    .wrap{
+      min-height:100vh; display:grid; place-items:center; padding:20px; position:relative; z-index:1;
+      background:
+        radial-gradient(1100px 600px at 12% -10%, rgba(99,102,241,.16), transparent),
+        radial-gradient(800px 500px at 88% 110%, rgba(255,125,77,.10), transparent);
+    }
+    .card{
+      width:min(480px, 94vw);
+      background: rgba(0,0,0,0.92);
+      border-radius:var(--radius);
+      border:2px solid transparent;
+      padding:26px 22px 22px;
+      position:relative;
+      box-shadow:
+        0 25px 60px rgba(0,0,0,0.6),
+        inset 0 1px 0 rgba(255,255,255,0.08),
+        0 0 0 1px rgba(102,126,234,0.28);
+      backdrop-filter: blur(20px);
+    }
+    .card::before{
+      content:'';
+      position:absolute; inset:-2px;
+      border-radius:calc(var(--radius) + 2px);
+      padding:2px;
+      background:linear-gradient(135deg,
+        rgba(102,126,234,.6) 0%,
+        rgba(118,75,162,.6) 25%,
+        rgba(168,85,247,.55) 50%,
+        rgba(102,126,234,.6) 100%);
+      -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+      -webkit-mask-composite:xor; mask-composite:exclude;
+      animation: sheen 3.2s linear infinite;
+      pointer-events:none;
+    }
+    @keyframes sheen{ 0%{opacity:.6} 50%{opacity:.9} 100%{opacity:.6} }
+
+    .brand{display:grid; place-items:center; gap:10px; margin:4px 0 18px}
+    .brand img{max-width:240px; width:78%; height:auto; opacity:.95; filter:drop-shadow(0 0 10px rgba(102,126,234,.25))}
+    .subtitle{margin:0; color:var(--muted); text-align:center; font-size:1rem}
+
+    .tabs{display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:18px 0 8px}
+    .tab{
+      padding:10px 12px; border-radius:12px; border:1px solid var(--border);
+      background:#131722; color:var(--text); font-weight:700; cursor:pointer;
+    }
+    .tab[aria-selected="true"]{border-color:var(--primary); background:rgba(99,102,241,.14)}
+
+    .panel{display:none} .panel[aria-hidden="false"]{display:block}
+    .field{display:grid; gap:6px; margin:10px 0}
+    label{color:#e5e7eb; font-size:.92rem; font-weight:500}
+    .input{
+      width:100%; padding:14px; border-radius:12px; border:1px solid #404040;
+      background:rgba(42,42,42,0.88); color:#fff; font-size:1rem;
+      transition:border-color .2s, box-shadow .2s, background .2s;
+    }
+    .input::placeholder{color:#6b7280}
+    .input:focus{outline:none; border-color:#667eea; box-shadow:var(--focus); background:rgba(42,42,42,1)}
+    .row{display:flex; align-items:center; justify-content:space-between; gap:8px; margin:8px 0 6px}
+    .remember{display:flex;align-items:center;gap:8px;color:#9ca3af;font-size:.9rem}
+    .remember input{accent-color:#667eea}
+    .link{background:none;border:0;color:#93c5fd;cursor:pointer;font-size:.9rem}
+
+    .btn{
+      width:100%; padding:14px 16px; border-radius:50px; border:0; cursor:pointer; color:#fff; font-weight:700;
+      background: linear-gradient(135deg, rgba(20,30,60,.40) 0%, rgba(40,50,100,.30) 50%, rgba(20,30,60,.40) 100%);
+      box-shadow:
+        0 0 0 1px rgba(0,255,255,.30),
+        0 0 0 2px rgba(138,43,226,.20),
+        0 0 0 3px rgba(0,255,127,.12),
+        0 6px 26px rgba(0,255,255,.22),
+        inset 0 1px 0 rgba(255,255,255,.20),
+        inset 0 -1px 0 rgba(255,255,255,.08);
+      transition: transform .15s ease, box-shadow .15s ease;
+      position:relative; overflow:hidden;
+    }
+    .btn:hover{transform:translateY(-1px) scale(1.01)}
+    .btn:active{transform:none}
+
+    .error, .ok{
+      border-radius:12px; padding:10px 12px; display:none; margin:8px 0 0;
+      border:1px solid; font-size:.95rem;
+    }
+    .error{color:#fecaca; background:rgba(220,38,38,.12); border-color:#7f1d1d}
+    .ok{color:#86efac; background:rgba(22,163,74,.12); border-color:#14532d}
+
+    .footer{margin-top:12px; color:var(--muted); font-size:.85rem; text-align:center}
+    @media (max-width:480px){ .card{padding:22px 16px} }
+  </style>
+</head>
+<body>
+  <div class="background-pattern" aria-hidden="true"></div>
+  <main class="wrap">
+    <section class="card" role="dialog" aria-modal="true" aria-labelledby="title">
+      <div class="brand">
+        <img src="/static/neurolm-glass-logo.png" alt="NeuroLM">
+        <p class="subtitle">Sign in to your account</p>
+      </div>
+
+      <div class="tabs" role="tablist" aria-label="Authentication">
+        <button id="tabLogin" class="tab" role="tab" aria-selected="true" aria-controls="panelLogin">Login</button>
+        <button id="tabRegister" class="tab" role="tab" aria-selected="false" aria-controls="panelRegister">Register</button>
+      </div>
+
+      <div id="alertError" class="error" role="alert"></div>
+      <div id="alertOk" class="ok" role="status"></div>
+
+      <!-- Login: posts to /login with expected field names -->
+      <section id="panelLogin" class="panel" role="tabpanel" aria-labelledby="tabLogin" aria-hidden="false">
+        <form id="formLogin" action="/login" method="post" novalidate>
+          <!-- If server provides CSRF token, render here -->
+          <!-- <input type="hidden" name="csrf_token" value="{{ csrf_token }}"> -->
+          <div class="field">
+            <label for="loginUsername">Username</label>
+            <input id="loginUsername" class="input" type="text" name="username" placeholder="your-username"
+                   autocomplete="username" required>
+          </div>
+          <div class="field">
+            <label for="loginPassword">Password</label>
+            <input id="loginPassword" class="input" type="password" name="password" placeholder="Enter your password"
+                   autocomplete="current-password" required minlength="8">
+          </div>
+          <div class="row">
+            <label class="remember">
+              <input type="checkbox" name="remember_me" id="remember_me"> Keep me signed in for 30 days
+            </label>
+            <a class="link" href="/forgot-password">Forgot?</a>
+          </div>
+          <button class="btn" type="submit">Sign In</button>
+        </form>
+      </section>
+
+      <!-- Register: posts to /register with expected field names -->
+      <section id="panelRegister" class="panel" role="tabpanel" aria-labelledby="tabRegister" aria-hidden="true">
+        <form id="formRegister" action="/register" method="post" novalidate>
+          <!-- <input type="hidden" name="csrf_token" value="{{ csrf_token }}"> -->
+          <div class="field">
+            <label for="regFirst">First name</label>
+            <input id="regFirst" class="input" type="text" name="first_name" autocomplete="given-name" required>
+          </div>
+          <div class="field">
+            <label for="regUsername">Username</label>
+            <input id="regUsername" class="input" type="text" name="username" autocomplete="username" required>
+          </div>
+          <div class="field">
+            <label for="regEmail">Email</label>
+            <input id="regEmail" class="input" type="email" name="email" autocomplete="email" required>
+          </div>
+          <div class="field">
+            <label for="regPassword">Password</label>
+            <input id="regPassword" class="input" type="password" name="password" autocomplete="new-password"
+                   minlength="12" required placeholder="Use 12+ chars with letters, numbers, symbols">
+          </div>
+          <div class="field">
+            <label for="regConfirm">Confirm password</label>
+            <input id="regConfirm" class="input" type="password" name="confirm_password" autocomplete="new-password"
+                   minlength="12" required>
+          </div>
+          <!-- Optional keys if your backend expects them -->
+          <div class="field">
+            <label for="openrouterKey">OpenRouter API key (optional)</label>
+            <input id="openrouterKey" class="input" type="text" name="openrouter_key" placeholder="sk-or-...">
+          </div>
+          <div class="field">
+            <label for="openaiKey">OpenAI API key (optional)</label>
+            <input id="openaiKey" class="input" type="text" name="openai_key" placeholder="sk-...">
+          </div>
+          <button class="btn" type="submit">Create Account</button>
+        </form>
+      </section>
+
+      <p class="footer">Protected by secure cookies and per‑user RLS. Add CSRF on server for form posts.</p>
+    </section>
+  </main>
+
+  <script>
+    // Tab switching only (no JSON calls)
+    const tabLogin = document.getElementById('tabLogin');
+    const tabRegister = document.getElementById('tabRegister');
+    const panelLogin = document.getElementById('panelLogin');
+    const panelRegister = document.getElementById('panelRegister');
+    const aErr = document.getElementById('alertError');
+    const aOk = document.getElementById('alertOk');
+
+    function showPanel(which){
+      const loginOn = which === 'login';
+      tabLogin.setAttribute('aria-selected', String(loginOn));
+      tabRegister.setAttribute('aria-selected', String(!loginOn));
+      panelLogin.setAttribute('aria-hidden', String(!loginOn));
+      panelRegister.setAttribute('aria-hidden', String(loginOn));
+      (loginOn ? document.getElementById('loginUsername') : document.getElementById('regFirst')).focus();
+      clearAlerts();
+    }
+    function clearAlerts(){ aErr.style.display='none'; aErr.textContent=''; aOk.style.display='none'; aOk.textContent=''; }
+
+    tabLogin.addEventListener('click', ()=>showPanel('login'));
+    tabRegister.addEventListener('click', ()=>showPanel('register'));
+
+    // Client-side password confirmation hint (non-blocking; server remains source of truth)
+    document.getElementById('formRegister').addEventListener('submit', (e)=>{
+      const pw = document.getElementById('regPassword').value;
+      const cpw = document.getElementById('regConfirm').value;
+      if (pw && cpw && pw !== cpw){
+        e.preventDefault();
+        aErr.textContent = 'Passwords do not match.';
+        aErr.style.display = 'block';
+      }
+    });
+
+    // Default focus
+    document.getElementById('loginUsername').focus();
+  </script>
+</body>
+</html>

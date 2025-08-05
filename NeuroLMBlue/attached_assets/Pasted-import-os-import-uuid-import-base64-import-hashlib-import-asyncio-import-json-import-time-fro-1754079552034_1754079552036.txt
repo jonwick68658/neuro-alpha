@@ -1,0 +1,3075 @@
+import os
+import uuid
+import base64
+import hashlib
+import asyncio
+import json
+import time
+from typing import Optional, List, Dict, Any
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import httpx
+import psycopg2
+from psycopg2 import Error as PsycopgError
+
+from fastapi import FastAPI, HTTPException, Form, Request, UploadFile, File, WebSocket
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
+from pydantic import BaseModel
+from passlib.context import CryptContext
+
+# External services
+from password_reset_service import password_reset_service
+from free_notification_service import send_free_email_notification, send_free_instant_notification
+from secrets_vault import vault, store_api_key, get_api_key, delete_api_key, list_api_keys, rotate_api_key
+
+# Optional systems - defensively imported
+try:
+    import hybrid_intelligent_memory
+    HybridIntelligentMemorySystem = hybrid_intelligent_memory.HybridIntelligentMemorySystem
+except ImportError as e:
+    print(f"[BOOT] Failed to import HybridIntelligentMemorySystem: {e}")
+    hybrid_intelligent_memory = None  # type: ignore[assignment]
+    HybridIntelligentMemorySystem = None  # type: ignore[assignment]
+
+try:
+    import hybrid_background_riai
+    from hybrid_background_riai import (
+        start_hybrid_background_riai,
+        stop_hybrid_background_riai,
+        process_hybrid_riai_batch,
+    )
+    HAVE_RIAI = True
+except ImportError as e:
+    print(f"[BOOT] Failed to import RIAI services: {e}")
+    start_hybrid_background_riai = None  # type: ignore[assignment]
+    stop_hybrid_background_riai = None   # type: ignore[assignment]
+    process_hybrid_riai_batch = None     # type: ignore[assignment]
+    HAVE_RIAI = False
+
+try:
+    from tool_generator import ToolGenerator
+    from tool_executor import ToolExecutor
+except ImportError as e:
+    print(f"[BOOT] Tool generator/executor unavailable: {e}")
+    ToolGenerator = None
+    ToolExecutor = None
+
+try:
+    from custom_model_trainer import (
+        analyze_user_training_potential,
+        prepare_user_training_data,
+        start_fine_tuning,
+        check_fine_tuning_status,
+    )
+    from training_scheduler import (
+        start_training_scheduler,
+        stop_training_scheduler,
+        get_training_status,
+        trigger_manual_training,
+        get_user_custom_model,
+    )
+except ImportError as e:
+    print(f"[BOOT] Training modules unavailable: {e}")
+    analyze_user_training_potential = None
+    prepare_user_training_data = None
+    start_fine_tuning = None
+    check_fine_tuning_status = None
+    start_training_scheduler = None
+    stop_training_scheduler = None
+
+    def get_training_status() -> Dict[str, bool]:
+        return {"running": False}
+
+    def trigger_manual_training() -> Dict[str, bool]:
+        return {"triggered": False}
+
+    def get_user_custom_model(user_id: str) -> Optional[str]:
+        return None
+
+try:
+    from personal_model_manager import PersonalModelManager
+except ImportError as e:
+    print(f"[BOOT] PersonalModelManager unavailable: {e}")
+    PersonalModelManager = None
+
+try:
+    from desktop_app_connector import DesktopAppConnector
+except ImportError as e:
+    print(f"[BOOT] DesktopAppConnector unavailable: {e}")
+    DesktopAppConnector = None
+
+# Environment
+SECRET_KEY = os.getenv("SECRET_KEY", "change-me")
+DATABASE_URL = os.getenv("DATABASE_URL")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+# Password hashing
+try:
+    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+except (RuntimeError, ValueError, TypeError) as e:
+    print(f"[BOOT] bcrypt warning: {e}")
+    pwd_context = CryptContext(schemes=["bcrypt"])
+
+# FastAPI app
+app = FastAPI(title="NeuroLM Memory System", version="1.0.0")
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+
+# Static mounts (ensure dirs exist)
+Path("static").mkdir(exist_ok=True)
+Path("attached_assets").mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/attached_assets", StaticFiles(directory="attached_assets"), name="attached_assets")
+
+# Globals
+hybrid_memory_system = None
+tool_generator = None
+tool_executor = None
+personal_model_manager = None
+desktop_connector = None
+_riai_task: Optional[asyncio.Task] = None
+
+# ---------------------- DB Helpers ----------------------
+
+def get_db_connection():
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL not configured")
+    return psycopg2.connect(DATABASE_URL)
+
+async def db_to_thread(func, *args, **kwargs):
+    return await asyncio.to_thread(func, *args, **kwargs)
+
+# ---------------------- Schema Setup ----------------------
+
+def init_db():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # Base tables
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id VARCHAR(255) PRIMARY KEY,
+                first_name VARCHAR(255) NOT NULL,
+                username VARCHAR(255) UNIQUE NOT NULL,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                feedback_score INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS conversations (
+                id VARCHAR(255) PRIMARY KEY,
+                user_id VARCHAR(255) NOT NULL,
+                title VARCHAR(255) NOT NULL,
+                topic VARCHAR(255),
+                sub_topic VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                message_count INTEGER DEFAULT 0,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS conversation_messages (
+                id SERIAL PRIMARY KEY,
+                conversation_id VARCHAR(255) NOT NULL,
+                message_type VARCHAR(50) NOT NULL,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_files (
+                id SERIAL PRIMARY KEY,
+                user_id VARCHAR(255) NOT NULL,
+                filename VARCHAR(255) NOT NULL,
+                content TEXT NOT NULL,
+                file_type VARCHAR(50),
+                uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS memory_links (
+                id SERIAL PRIMARY KEY,
+                source_memory_id VARCHAR(255) NOT NULL,
+                linked_topic VARCHAR(255) NOT NULL,
+                user_id VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id VARCHAR(255) PRIMARY KEY,
+                user_id VARCHAR(255) NOT NULL,
+                username VARCHAR(255) NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+        """)
+        # User tools
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_tools (
+                id SERIAL PRIMARY KEY,
+                user_id VARCHAR(255) NOT NULL,
+                tool_name VARCHAR(255) NOT NULL,
+                function_code TEXT NOT NULL,
+                schema_json TEXT NOT NULL,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT TRUE,
+                usage_count INTEGER DEFAULT 0,
+                success_count INTEGER DEFAULT 0,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                UNIQUE(user_id, tool_name)
+            );
+        """)
+
+        # Intelligent memory mirror (if used by hybrid memory)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS intelligent_memories (
+                id VARCHAR(255) PRIMARY KEY,
+                user_id VARCHAR(255) NOT NULL,
+                conversation_id VARCHAR(255) NOT NULL,
+                message_type VARCHAR(50) NOT NULL,
+                content TEXT NOT NULL,
+                message_id INT,
+                importance FLOAT,
+                r_t_score FLOAT,
+                h_t_score FLOAT,
+                quality_score FLOAT,
+                final_quality_score FLOAT,
+                evaluation_model TEXT,
+                evaluation_timestamp TIMESTAMP,
+                human_feedback_score FLOAT,
+                human_feedback_type TEXT,
+                human_feedback_timestamp TIMESTAMP,
+                uf_score_awarded BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            );
+        """)
+
+        # Response cache (RIAI)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS response_cache (
+                response_hash TEXT NOT NULL,
+                evaluator_version TEXT NOT NULL,
+                r_t_score FLOAT NOT NULL,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (response_hash, evaluator_version)
+            );
+        """)
+
+        # Optional user_api_keys
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_api_keys (
+                user_id VARCHAR(255) NOT NULL,
+                provider VARCHAR(255) NOT NULL,
+                encrypted_key TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP,
+                PRIMARY KEY (user_id, provider),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+        """)
+
+        # Indexes
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_conv_user ON conversations(user_id, updated_at DESC);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_msgs_conv ON conversation_messages(conversation_id, created_at DESC);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_files_user ON user_files(user_id, uploaded_at DESC);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_im_user ON intelligent_memories(user_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_im_type_qual ON intelligent_memories(message_type, quality_score, created_at);")
+        # Safe placeholder index; if pgvector present, replace with proper vector index via migrations
+        try:
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_im_content_text ON intelligent_memories ((md5(content)))")
+        except PsycopgError as e:
+            print(f"[INIT] index warning: {e}")
+
+        conn.commit()
+        print("[INIT] Database tables ensured/migrated.")
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+# ---------------------- Sessions ----------------------
+
+def create_session(user_id: str, username: str, extended: bool = False) -> Optional[str]:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        session_id = str(uuid.uuid4())
+        expires_at = datetime.now() + (timedelta(days=30) if extended else timedelta(hours=24))
+        cur.execute(
+            "INSERT INTO sessions (session_id, user_id, username, expires_at) VALUES (%s, %s, %s, %s)",
+            (session_id, user_id, username, expires_at)
+        )
+        conn.commit()
+        return session_id
+    except PsycopgError as e:
+        print(f"[SESSION] create_session DB error: {e}")
+        return None
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        try:
+            conn.close()
+        except psycopg2.Error:
+            pass
+
+def get_session(session_id: str) -> Optional[Dict]:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT user_id, username FROM sessions WHERE session_id = %s AND expires_at > NOW()", (session_id,))
+        row = cur.fetchone()
+        if row:
+            return {"user_id": row[0], "username": row[1]}
+        return None
+    except PsycopgError as e:
+        print(f"[SESSION] get_session DB error: {e}")
+        return None
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        try:
+            conn.close()
+        except psycopg2.Error:
+            pass
+
+def delete_session(session_id: str) -> bool:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM sessions WHERE session_id = %s", (session_id,))
+        conn.commit()
+        return True
+    except PsycopgError as e:
+        print(f"[SESSION] delete_session DB error: {e}")
+        return False
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        try:
+            conn.close()
+        except psycopg2.Error:
+            pass
+
+def cleanup_expired_sessions() -> bool:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM sessions WHERE expires_at <= NOW()")
+        conn.commit()
+        return True
+    except PsycopgError as e:
+        print(f"[SESSION] cleanup DB error: {e}")
+        return False
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        try:
+            conn.close()
+        except psycopg2.Error:
+            pass
+
+def get_authenticated_user(request: Request) -> Optional[Dict]:
+    session_id = request.cookies.get("session_id")
+    if not session_id:
+        return None
+    return get_session(session_id)
+
+# ---------------------- Bootstrapping ----------------------
+
+@app.on_event("startup")
+async def on_startup():
+    global hybrid_memory_system, tool_generator, tool_executor, personal_model_manager, desktop_connector, _riai_task
+
+    await db_to_thread(init_db)
+
+    if HybridIntelligentMemorySystem:
+        try:
+            if (hybrid_intelligent_memory is not None and
+                hasattr(hybrid_intelligent_memory, "hybrid_intelligent_memory_system") and
+                getattr(hybrid_intelligent_memory, "hybrid_intelligent_memory_system") is not None):
+                hybrid_memory_system = hybrid_intelligent_memory.hybrid_intelligent_memory_system
+                print("✅ Hybrid intelligent memory system (singleton) bound")
+            else:
+                hybrid_memory_system = HybridIntelligentMemorySystem()
+                print("✅ Hybrid intelligent memory system initialized")
+        except (RuntimeError, ValueError, TypeError) as e:
+            print(f"[BOOT] Memory system init error: {e}")
+            hybrid_memory_system = None
+
+    if ToolGenerator and ToolExecutor:
+        try:
+            tool_generator = ToolGenerator()
+            tool_executor = ToolExecutor()
+            print("✅ Tool generation/execution initialized")
+        except (RuntimeError, ValueError, TypeError) as e:
+            print(f"[BOOT] Tool init error: {e}")
+
+    if PersonalModelManager:
+        try:
+            personal_model_manager = PersonalModelManager()
+            print("✅ Personal Model Manager initialized")
+        except (RuntimeError, ValueError, TypeError) as e:
+            print(f"[BOOT] PMM init error: {e}")
+
+    if DesktopAppConnector:
+        try:
+            desktop_connector = DesktopAppConnector()
+            print("✅ Desktop Connector initialized")
+        except (RuntimeError, ValueError, TypeError) as e:
+            print(f"[BOOT] Desktop connector init error: {e}")
+
+    try:
+        if HAVE_RIAI and start_hybrid_background_riai:
+            _riai_task = asyncio.create_task(start_hybrid_background_riai())
+            print("✅ Hybrid background RIAI service started")
+    except (RuntimeError, ValueError, TypeError) as e:
+        print(f"[BOOT] RIAI start error: {e}")
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    global _riai_task
+    try:
+        if HAVE_RIAI and stop_hybrid_background_riai:
+            await stop_hybrid_background_riai()
+            print("✅ Hybrid background RIAI service stopped")
+    except (RuntimeError, ValueError, TypeError) as e:
+        print(f"[SHUTDOWN] RIAI stop error: {e}")
+
+    if _riai_task and not _riai_task.done():
+        try:
+            await asyncio.wait_for(_riai_task, timeout=2.0)
+        except asyncio.TimeoutError:
+            _riai_task.cancel()
+            try:
+                await _riai_task
+            except asyncio.CancelledError:
+                pass
+
+    try:
+        if hybrid_memory_system and hasattr(hybrid_memory_system, "close"):
+            hybrid_memory_system.close()
+            print("✅ Hybrid memory system resources closed")
+    except (RuntimeError, ValueError, TypeError) as e:
+        print(f"[SHUTDOWN] Memory close error: {e}")
+
+# ---------------------- Auth and Registration ----------------------
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+def create_user_in_db(first_name: str, username: str, email: str, password_hash: str) -> bool:
+    user_id = str(uuid.uuid4())
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id FROM users WHERE username = %s OR email = %s", (username, email))
+        if cur.fetchone():
+            return False
+        cur.execute(
+            "INSERT INTO users (id, first_name, username, email, password_hash) VALUES (%s, %s, %s, %s, %s)",
+            (user_id, first_name, username, email, password_hash)
+        )
+        conn.commit()
+        return True
+    except PsycopgError as e:
+        print(f"[AUTH] create_user DB error: {e}")
+        return False
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+def verify_user_login(username: str, password: str) -> Optional[str]:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, password_hash FROM users WHERE username = %s", (username,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        user_id, stored_hash = row
+        if stored_hash.startswith("$2b$"):
+            if pwd_context.verify(password, stored_hash):
+                return user_id
+        else:
+            if hashlib.sha256(password.encode()).hexdigest() == stored_hash:
+                new_hash = pwd_context.hash(password)
+                cur.execute("UPDATE users SET password_hash = %s WHERE id = %s", (new_hash, user_id))
+                conn.commit()
+                return user_id
+        return None
+    except PsycopgError as e:
+        print(f"[AUTH] verify_login DB error: {e}")
+        return None
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+def get_user_first_name(user_id: str) -> Optional[str]:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT first_name FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+        return row[0] if row else None
+    except PsycopgError as e:
+        print(f"[AUTH] get_first_name DB error: {e}")
+        return None
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+# ---------------------- UI Routes ----------------------
+
+@app.get("/")
+def serve_chat(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    return FileResponse("chat.html") if Path("chat.html").exists() else HTMLResponse("<h1>Chat UI not deployed</h1>")
+
+@app.get("/mobile")
+def serve_mobile(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    return FileResponse("mobile.html") if Path("mobile.html").exists() else HTMLResponse("<h1>Mobile PWA not deployed</h1>")
+
+@app.get("/manifest.json")
+def serve_manifest():
+    return FileResponse("manifest.json") if Path("manifest.json").exists() else JSONResponse({})
+
+@app.get("/sw.js")
+def serve_service_worker():
+    return FileResponse("sw.js") if Path("sw.js").exists() else Response("", media_type="application/javascript")
+
+@app.get("/secrets")
+def serve_secrets_manager(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    return FileResponse("secrets_manager.html") if Path("secrets_manager.html").exists() else HTMLResponse("<h1>Secrets UI not deployed</h1>")
+
+@app.get("/training")
+def serve_training_dashboard(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    return FileResponse("training_dashboard.html") if Path("training_dashboard.html").exists() else HTMLResponse("<h1>Training UI not deployed</h1>")
+
+@app.get("/personal-models")
+def serve_personal_models_dashboard(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    return FileResponse("personal_models_dashboard.html") if Path("personal_models_dashboard.html").exists() else HTMLResponse("<h1>Personal models UI not deployed</h1>")
+
+@app.get("/register")
+def register_page():
+    return FileResponse("static/register.html") if Path("static/register.html").exists() else HTMLResponse("<h1>Register UI not deployed</h1>")
+
+@app.post("/register")
+async def register_user(
+    first_name: str = Form(...),
+    username: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    confirm_password: str = Form(...),
+    openrouter_key: Optional[str] = Form(""),
+    openai_key: Optional[str] = Form("")
+):
+    if password != confirm_password:
+        return HTMLResponse("<script>alert('Passwords do not match'); window.location.href = '/register';</script>")
+    password_hash = hash_password(password)
+    success = await db_to_thread(create_user_in_db, first_name, username, email, password_hash)
+    if not success:
+        return HTMLResponse("<script>alert('Username or email already exists.'); window.location.href = '/register';</script>")
+
+    # Save optional API keys
+    if (openrouter_key and openrouter_key.strip()) or (openai_key and openai_key.strip()):
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM users WHERE username = %s", (username,))
+            row = cur.fetchone()
+            if row:
+                user_id = row[0]
+                key = base64.urlsafe_b64encode(hashlib.sha256(user_id.encode()).digest())
+                from cryptography.fernet import Fernet
+                fernet = Fernet(key)
+                payload: Dict[str, str] = {}
+                if openrouter_key and openrouter_key.strip():
+                    payload["openrouter_key"] = openrouter_key.strip()
+                if openai_key and openai_key.strip():
+                    payload["openai_key"] = openai_key.strip()
+                for provider, api_key in payload.items():
+                    encrypted = fernet.encrypt(api_key.encode()).decode()
+                    cur.execute("""
+                        INSERT INTO user_api_keys (user_id, provider, encrypted_key, created_at)
+                        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+                        ON CONFLICT (user_id, provider)
+                        DO UPDATE SET encrypted_key = EXCLUDED.encrypted_key, updated_at = CURRENT_TIMESTAMP
+                    """, (user_id, provider, encrypted))
+                conn.commit()
+            cur.close()
+            conn.close()
+        except PsycopgError as e:
+            print(f"[REGISTER] API key store DB error: {e}")
+    return HTMLResponse("<script>alert('Account created. Please log in.'); window.location.href = '/login';</script>")
+
+@app.get("/login")
+def login_page():
+    return FileResponse("static/login.html") if Path("static/login.html").exists() else HTMLResponse("<h1>Login UI not deployed</h1>")
+
+@app.post("/login")
+async def login_user(username: str = Form(...), password: str = Form(...), remember_me: bool = Form(False)):
+    user_id = await db_to_thread(verify_user_login, username, password)
+    if not user_id:
+        return HTMLResponse("<script>alert('Invalid credentials'); window.location.href = '/login';</script>")
+    session_id = await db_to_thread(create_session, user_id, username, remember_me)
+    if not session_id:
+        return HTMLResponse("<script>alert('Failed to create session'); window.location.href = '/login';</script>")
+    resp = RedirectResponse(url="/", status_code=302)
+    if remember_me:
+        resp.set_cookie("session_id", session_id, httponly=True, max_age=30 * 24 * 3600)
+    else:
+        resp.set_cookie("session_id", session_id, httponly=True)
+    return resp
+
+# ---------------------- Conversation Helpers ----------------------
+
+def create_conversation(user_id: str, title: Optional[str] = None, topic: Optional[str] = None, sub_topic: Optional[str] = None) -> Optional[str]:
+    cleanup_placeholder_conversations(user_id, topic, sub_topic)
+
+    conversation_id = str(uuid.uuid4())
+    title = title or "New Conversation"
+    topic = (topic or "general").lower().strip()
+    sub_topic = sub_topic.lower().strip() if sub_topic else None
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO conversations (id, user_id, title, topic, sub_topic, created_at, updated_at, message_count)
+            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+        """, (conversation_id, user_id, title, topic, sub_topic))
+        conn.commit()
+        return conversation_id
+    except PsycopgError as e:
+        print(f"[CONV] create DB error: {e}")
+        return None
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+def update_conversation_topic_db(conversation_id: str, topic: Optional[str] = None, sub_topic: Optional[str] = None) -> bool:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            UPDATE conversations 
+            SET topic = %s, sub_topic = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+        """, (topic, sub_topic, conversation_id))
+        ok = cur.rowcount > 0
+        conn.commit()
+        return ok
+    except PsycopgError as e:
+        print(f"[CONV] update topic DB error: {e}")
+        return False
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+def save_conversation_message(conversation_id: str, message_type: str, content: str) -> Optional[int]:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO conversation_messages (conversation_id, message_type, content, created_at)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            RETURNING id
+        """, (conversation_id, message_type, content))
+        row = cur.fetchone()
+        if not row:
+            raise RuntimeError("Message insert failed")
+        msg_id = int(row[0])
+        cur.execute("UPDATE conversations SET message_count = message_count + 1, updated_at = CURRENT_TIMESTAMP WHERE id = %s", (conversation_id,))
+        if message_type == 'user':
+            cur.execute('SELECT message_count FROM conversations WHERE id = %s', (conversation_id,))
+            count_row = cur.fetchone()
+            if count_row and count_row[0] == 1:
+                title = content[:50] + "..." if len(content) > 50 else content
+                cur.execute('UPDATE conversations SET title = %s WHERE id = %s', (title, conversation_id))
+        conn.commit()
+        return msg_id
+    except PsycopgError as e:
+        print(f"[MSG] save DB error: {e}")
+        return None
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+def get_conversation_messages_db(conversation_id: str, limit: int = 30, before_id: Optional[str] = None) -> Dict:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT COUNT(*) FROM conversation_messages WHERE conversation_id = %s', (conversation_id,))
+        row = cur.fetchone()
+        total_count = row[0] if row and row[0] is not None else 0
+
+        if before_id:
+            cur.execute('''
+                SELECT m1.id, m1.message_type, m1.content, m1.created_at
+                FROM conversation_messages m1
+                JOIN conversation_messages m2 ON m2.id = %s AND m2.conversation_id = %s
+                WHERE m1.conversation_id = %s AND m1.created_at < m2.created_at
+                ORDER BY m1.created_at DESC
+                LIMIT %s
+            ''', (before_id, conversation_id, conversation_id, limit))
+            rows = list(reversed(cur.fetchall()))
+        else:
+            cur.execute('''
+                SELECT id, message_type, content, created_at
+                FROM conversation_messages
+                WHERE conversation_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+            ''', (conversation_id, limit))
+            rows = list(reversed(cur.fetchall()))
+        messages = [{
+            'id': str(r[0]),
+            'message_type': r[1],
+            'content': r[2],
+            'created_at': r[3].isoformat() if r[3] else None
+        } for r in rows]
+
+        has_more = False
+        if messages:
+            oldest_id = messages[0]['id']
+            cur2 = get_db_connection().cursor()
+            try:
+                cur2.execute('''
+                    SELECT COUNT(*) FROM conversation_messages 
+                    WHERE conversation_id = %s AND created_at < (
+                        SELECT created_at FROM conversation_messages WHERE id = %s
+                    )
+                ''', (conversation_id, oldest_id))
+                more_row = cur2.fetchone()
+                has_more = more_row[0] > 0 if more_row and more_row[0] is not None else False
+            finally:
+                try:
+                    cur2.close()
+                except psycopg2.Error:
+                    pass
+
+        return {
+            'messages': messages,
+            'total_count': total_count,
+            'has_more': has_more,
+            'oldest_id': messages[0]['id'] if messages else None
+        }
+    except PsycopgError as e:
+        print(f"[MSG] list DB error: {e}")
+        return {'messages': [], 'total_count': 0, 'has_more': False, 'oldest_id': None}
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+def get_conversation_messages_all_db(conversation_id: str) -> List[Dict]:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            SELECT id, message_type, content, created_at
+            FROM conversation_messages
+            WHERE conversation_id = %s
+            ORDER BY created_at ASC
+        ''', (conversation_id,))
+        return [{
+            'id': str(r[0]),
+            'message_type': r[1],
+            'content': r[2],
+            'created_at': r[3].isoformat() if r[3] else None
+        } for r in cur.fetchall()]
+    except PsycopgError as e:
+        print(f"[MSG] list-all DB error: {e}")
+        return []
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+def get_all_topics(user_id: str) -> Dict:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            SELECT DISTINCT topic, sub_topic
+            FROM conversations
+            WHERE user_id = %s AND topic IS NOT NULL
+            ORDER BY topic, sub_topic
+        ''', (user_id,))
+        topics: Dict[str, List[str]] = {}
+        for t, s in cur.fetchall():
+            if t not in topics:
+                topics[t] = []
+            if s and s not in topics[t]:
+                topics[t].append(s)
+        return topics
+    except PsycopgError as e:
+        print(f"[TOPICS] get DB error: {e}")
+        return {}
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+def get_sub_topic_count(user_id: str, topic: str) -> int:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            SELECT COUNT(DISTINCT sub_topic)
+            FROM conversations
+            WHERE user_id = %s AND topic = %s AND sub_topic IS NOT NULL
+        ''', (user_id, topic.lower()))
+        row = cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+    except PsycopgError as e:
+        print(f"[TOPICS] subtopic count DB error: {e}")
+        return 0
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+def create_topic_entry(user_id: str, topic: str) -> bool:
+    topic = topic.lower().strip()
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT COUNT(*) FROM conversations WHERE user_id = %s AND topic = %s', (user_id, topic))
+        row = cur.fetchone()
+        if row and row[0] and row[0] > 0:
+            return True
+        conversation_id = str(uuid.uuid4())
+        cur.execute("""
+            INSERT INTO conversations (id, user_id, title, topic, created_at, updated_at, message_count)
+            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+        """, (conversation_id, user_id, f"[Topic: {topic}]", topic))
+        conn.commit()
+        return True
+    except PsycopgError as e:
+        print(f"[TOPICS] create DB error: {e}")
+        return False
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+def create_subtopic_entry(user_id: str, topic: str, sub_topic: str) -> bool:
+    topic = topic.lower().strip()
+    sub_topic = sub_topic.lower().strip()
+    if get_sub_topic_count(user_id, topic) >= 5:
+        return False
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            SELECT COUNT(*) FROM conversations 
+            WHERE user_id = %s AND topic = %s AND sub_topic = %s
+        ''', (user_id, topic, sub_topic))
+        row = cur.fetchone()
+        if row and row[0] and row[0] > 0:
+            return True
+        conversation_id = str(uuid.uuid4())
+        cur.execute("""
+            INSERT INTO conversations (id, user_id, title, topic, sub_topic, created_at, updated_at, message_count)
+            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+        """, (conversation_id, user_id, f"[Sub-topic: {topic} → {sub_topic}]", topic, sub_topic))
+        conn.commit()
+        return True
+    except PsycopgError as e:
+        print(f"[TOPICS] create sub-topic DB error: {e}")
+        return False
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+def cleanup_placeholder_conversations(user_id: str, topic: Optional[str], sub_topic: Optional[str]) -> int:
+    if not topic:
+        return 0
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        t = topic.lower().strip()
+        s = sub_topic.lower().strip() if sub_topic else None
+        if s:
+            placeholder_title = f"[Sub-topic: {t} → {s}]"
+            cur.execute('''
+                SELECT id FROM conversations 
+                WHERE user_id = %s AND topic = %s AND sub_topic = %s 
+                AND message_count = 0 AND title = %s
+            ''', (user_id, t, s, placeholder_title))
+        else:
+            placeholder_title = f"[Topic: {t}]"
+            cur.execute('''
+                SELECT id FROM conversations 
+                WHERE user_id = %s AND topic = %s AND sub_topic IS NULL 
+                AND message_count = 0 AND title = %s
+            ''', (user_id, t, placeholder_title))
+        ids = [r[0] for r in cur.fetchall()]
+        deleted = 0
+        for cid in ids:
+            cur.execute('DELETE FROM conversations WHERE id = %s', (cid,))
+            deleted += cur.rowcount
+        conn.commit()
+        if deleted > 0:
+            print(f"[TOPICS] Cleaned {deleted} placeholder(s) for '{t}'" + (f" → '{s}'" if s else ""))
+        return deleted
+    except PsycopgError as e:
+        print(f"[TOPICS] cleanup DB error: {e}")
+        return 0
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+def create_memory_link(memory_id: str, linked_topic: str, user_id: str) -> bool:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            SELECT COUNT(*) FROM memory_links 
+            WHERE source_memory_id = %s AND linked_topic = %s AND user_id = %s
+        ''', (memory_id, linked_topic.lower(), user_id))
+        row = cur.fetchone()
+        if row and row[0] and row[0] > 0:
+            return True
+        cur.execute('''
+            INSERT INTO memory_links (source_memory_id, linked_topic, user_id, created_at)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+        ''', (memory_id, linked_topic.lower(), user_id))
+        conn.commit()
+        return True
+    except PsycopgError as e:
+        print(f"[MEMLINK] create DB error: {e}")
+        return False
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+def remove_topic_links(current_topic: str, linked_topic: str, user_id: str) -> bool:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            DELETE FROM memory_links 
+            WHERE linked_topic = %s AND user_id = %s
+        ''', (linked_topic.lower(), user_id))
+        conn.commit()
+        return True
+    except PsycopgError as e:
+        print(f"[MEMLINK] remove DB error: {e}")
+        return False
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+def get_linked_memories(current_topic: str, user_id: str, limit: int = 2) -> List[str]:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            SELECT DISTINCT ml.source_memory_id
+            FROM memory_links ml
+            WHERE ml.user_id = %s
+            ORDER BY ml.created_at DESC
+            LIMIT %s
+        ''', (user_id, limit))
+        return [r[0] for r in cur.fetchall()]
+    except PsycopgError as e:
+        print(f"[MEMLINK] list DB error: {e}")
+        return []
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+def get_topic_deletion_info(user_id: str, topic: str) -> Dict:
+    topic = topic.lower().strip()
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            SELECT COUNT(*) as conversation_count,
+                   COUNT(DISTINCT sub_topic) as subtopic_count,
+                   COALESCE(SUM(message_count), 0) as total_messages
+            FROM conversations
+            WHERE user_id = %s AND topic = %s
+        ''', (user_id, topic))
+        row = cur.fetchone()
+        if not row:
+            return {'exists': False}
+        conversation_count = int(row[0] or 0)
+        subtopic_count = int(row[1] or 0)
+        total_messages = int(row[2] or 0)
+        cur.execute('''
+            SELECT DISTINCT sub_topic
+            FROM conversations
+            WHERE user_id = %s AND topic = %s AND sub_topic IS NOT NULL
+        ''', (user_id, topic))
+        subtopics = [r[0] for r in cur.fetchall()]
+        return {
+            'topic': topic,
+            'conversation_count': conversation_count,
+            'subtopic_count': subtopic_count,
+            'subtopics': subtopics,
+            'total_messages': total_messages,
+            'exists': conversation_count > 0
+        }
+    except PsycopgError as e:
+        print(f"[TOPICS] deletion info DB error: {e}")
+        return {'exists': False}
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+def get_subtopic_deletion_info(user_id: str, topic: str, subtopic: str) -> Dict:
+    topic = topic.lower().strip()
+    subtopic = subtopic.lower().strip()
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            SELECT COUNT(*) as conversation_count,
+                   COALESCE(SUM(message_count), 0) as total_messages
+            FROM conversations
+            WHERE user_id = %s AND topic = %s AND sub_topic = %s
+        ''', (user_id, topic, subtopic))
+        row = cur.fetchone()
+        if not row:
+            return {'exists': False}
+        return {
+            'topic': topic,
+            'subtopic': subtopic,
+            'conversation_count': int(row[0] or 0),
+            'total_messages': int(row[1] or 0),
+            'exists': (row[0] or 0) > 0
+        }
+    except PsycopgError as e:
+        print(f"[TOPICS] subtopic deletion info DB error: {e}")
+        return {'exists': False}
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+def delete_topic_and_data(user_id: str, topic: str) -> bool:
+    topic = topic.lower().strip()
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT id FROM conversations WHERE user_id = %s AND topic = %s', (user_id, topic))
+        conv_ids = [r[0] for r in cur.fetchall()]
+        if not conv_ids:
+            return False
+        conn.autocommit = False
+        try:
+            cur.execute('DELETE FROM memory_links WHERE user_id = %s AND linked_topic = %s', (user_id, topic))
+            for cid in conv_ids:
+                cur.execute('DELETE FROM conversation_messages WHERE conversation_id = %s', (cid,))
+            cur.execute('DELETE FROM conversations WHERE user_id = %s AND topic = %s', (user_id, topic))
+            conn.commit()
+
+            if hybrid_memory_system and getattr(hybrid_memory_system, "neo4j_available", False):
+                with hybrid_memory_system.neo4j_driver.session() as session:
+                    for cid in conv_ids:
+                        session.run("""
+                            MATCH (m:IntelligentMemory {user_id: $user_id, conversation_id: $conversation_id})
+                            DELETE m
+                        """, {'user_id': user_id, 'conversation_id': cid})
+            return True
+        except Exception as e:
+            conn.rollback()
+            print(f"[TOPICS] delete-topic txn error: {e}")
+            return False
+    except PsycopgError as e:
+        print(f"[TOPICS] delete-topic DB error: {e}")
+        return False
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+def delete_subtopic_and_data(user_id: str, topic: str, subtopic: str) -> bool:
+    topic = topic.lower().strip()
+    subtopic = subtopic.lower().strip()
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT id FROM conversations WHERE user_id = %s AND topic = %s AND sub_topic = %s', (user_id, topic, subtopic))
+        conv_ids = [r[0] for r in cur.fetchall()]
+        if not conv_ids:
+            return False
+        conn.autocommit = False
+        try:
+            for cid in conv_ids:
+                cur.execute('DELETE FROM conversation_messages WHERE conversation_id = %s', (cid,))
+            cur.execute('DELETE FROM conversations WHERE user_id = %s AND topic = %s AND sub_topic = %s', (user_id, topic, subtopic))
+            conn.commit()
+            if hybrid_memory_system and getattr(hybrid_memory_system, "neo4j_available", False):
+                with hybrid_memory_system.neo4j_driver.session() as session:
+                    for cid in conv_ids:
+                        session.run("""
+                            MATCH (m:IntelligentMemory {user_id: $user_id, conversation_id: $conversation_id})
+                            DELETE m
+                        """, {'user_id': user_id, 'conversation_id': cid})
+            return True
+        except Exception as e:
+            conn.rollback()
+            print(f"[TOPICS] delete-subtopic txn error: {e}")
+            return False
+    except PsycopgError as e:
+        print(f"[TOPICS] delete-subtopic DB error: {e}")
+        return False
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+# ---------------------- Slash Commands ----------------------
+
+class ChatResponse(BaseModel):
+    response: str
+    memory_stored: bool
+    context_used: int
+    conversation_id: str
+    assistant_message_id: Optional[str] = None
+    deletion_info: Optional[Dict] = None
+
+async def handle_slash_command(command: str, user_id: str, conversation_id: str) -> ChatResponse:
+    parts = command.strip().split()
+    cmd = parts[0].lower()
+    try:
+        if cmd == '/files':
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT filename, file_type, uploaded_at FROM user_files WHERE user_id = %s ORDER BY uploaded_at DESC", (user_id,))
+            files = cur.fetchall()
+            cur.close()
+            conn.close()
+            if not files:
+                response = "No files uploaded yet. Use the + button to upload files."
+            else:
+                response = "**Your uploaded files:**\n\n"
+                for filename, file_type, uploaded_at in files:
+                    date = uploaded_at.strftime("%Y-%m-%d %H:%M") if uploaded_at else ""
+                    response += f"• `{filename}` ({file_type}) - {date}\n"
+                response += f"\nUse `/view [filename]` to display file content."
+        elif cmd == '/view':
+            if len(parts) < 2:
+                response = "Usage: `/view [filename]`"
+            else:
+                filename = ' '.join(parts[1:])
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute("SELECT content FROM user_files WHERE user_id = %s AND filename = %s", (user_id, filename))
+                row = cur.fetchone()
+                cur.close()
+                conn.close()
+                if row:
+                    response = f"**File: {filename}**\n\n```\n{row[0]}\n```"
+                else:
+                    response = f"File '{filename}' not found. Use `/files` to see available files."
+        elif cmd == '/delete':
+            if len(parts) < 2:
+                response = "Usage: `/delete [filename]`"
+            else:
+                filename = ' '.join(parts[1:])
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute("DELETE FROM user_files WHERE user_id = %s AND filename = %s", (user_id, filename))
+                deleted = cur.rowcount
+                conn.commit()
+                cur.close()
+                conn.close()
+                response = f"File '{filename}' deleted successfully." if deleted > 0 else f"File '{filename}' not found."
+        elif cmd == '/search':
+            if len(parts) < 2:
+                response = "Usage: `/search [term]`"
+            else:
+                term = ' '.join(parts[1:])
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute("SELECT filename, file_type, uploaded_at FROM user_files WHERE user_id = %s AND filename ILIKE %s ORDER BY uploaded_at DESC", (user_id, f"%{term}%"))
+                files = cur.fetchall()
+                cur.close()
+                conn.close()
+                if not files:
+                    response = f"No files found matching '{term}'."
+                else:
+                    response = f"**Files matching '{term}':**\n\n"
+                    for filename, file_type, uploaded_at in files:
+                        date = uploaded_at.strftime("%Y-%m-%d %H:%M") if uploaded_at else ""
+                        response += f"• `{filename}` ({file_type}) - {date}\n"
+        elif cmd == '/download':
+            if len(parts) < 2:
+                response = "Usage: `/download [filename]`"
+            else:
+                filename = ' '.join(parts[1:])
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute("SELECT filename FROM user_files WHERE user_id = %s AND filename = %s", (user_id, filename))
+                row = cur.fetchone()
+                cur.close()
+                conn.close()
+                if row:
+                    download_url = f"/api/download/{filename}"
+                    response = f"**Download ready:** `{filename}`\n\n[Download {filename}]({download_url})"
+                else:
+                    response = f"File '{filename}' not found. Use `/files` to see available files."
+        elif cmd == '/topics':
+            topics = get_all_topics(user_id)
+            if not topics:
+                response = "No topics created yet. Start a conversation with a topic to organize your chats."
+            else:
+                response = "**Your Topics:**\n\n"
+                for topic, sub_topics in topics.items():
+                    response += f"• **{topic}**\n"
+                    if sub_topics:
+                        for s in sub_topics:
+                            response += f"  - {s}\n"
+                    else:
+                        response += "  - (no sub-topics)\n"
+        elif cmd == '/link':
+            if len(parts) < 2:
+                response = "Usage: `/link [topic]`"
+            else:
+                linked_topic = ' '.join(parts[1:]).lower()
+                response = f"Ready to link your next message to **{linked_topic}** topic. Your next message will be connected to memories from that topic."
+        elif cmd == '/unlink':
+            if len(parts) < 2:
+                response = "Usage: `/unlink [topic]`"
+            else:
+                linked_topic = ' '.join(parts[1:]).lower()
+                success = remove_topic_links("", linked_topic, user_id)
+                response = "Removed links." if success else "Error removing links."
+        elif cmd == '/delete-topic':
+            if len(parts) < 2:
+                response = "Usage: `/delete-topic [topic_name]`"
+            else:
+                topic_name = ' '.join(parts[1:]).lower()
+                info = get_topic_deletion_info(user_id, topic_name)
+                if not info['exists']:
+                    response = f"Topic '{topic_name}' not found."
+                else:
+                    return ChatResponse(
+                        response="DELETION_CONFIRM",
+                        memory_stored=False,
+                        context_used=0,
+                        conversation_id=conversation_id,
+                        deletion_info={
+                            "type": "topic",
+                            "topic": info['topic'],
+                            "subtopic": None,
+                            "conversation_count": info['conversation_count'],
+                            "subtopic_count": info['subtopic_count'],
+                            "subtopics": info['subtopics'],
+                            "total_messages": info['total_messages']
+                        }
+                    )
+        elif cmd == '/delete-subtopic':
+            if len(parts) < 3:
+                response = "Usage: `/delete-subtopic [topic] [subtopic]`"
+            else:
+                topic_name = parts[1].lower()
+                subtopic_name = ' '.join(parts[2:]).lower()
+                info = get_subtopic_deletion_info(user_id, topic_name, subtopic_name)
+                if not info['exists']:
+                    response = f"Subtopic '{subtopic_name}' under topic '{topic_name}' not found."
+                else:
+                    return ChatResponse(
+                        response="DELETION_CONFIRM",
+                        memory_stored=False,
+                        context_used=0,
+                        conversation_id=conversation_id,
+                        deletion_info={
+                            "type": "subtopic",
+                            "topic": info['topic'],
+                            "subtopic": info['subtopic'],
+                            "conversation_count": info['conversation_count'],
+                            "subtopic_count": 0,
+                            "subtopics": [],
+                            "total_messages": info['total_messages']
+                        }
+                    )
+        else:
+            response = ("**Available commands:**\n\n"
+                        "• `/files`\n• `/view [filename]`\n• `/delete [filename]`\n• `/search [term]`\n"
+                        "• `/download [filename]`\n• `/topics`\n• `/link [topic]`\n• `/unlink [topic]`\n"
+                        "• `/delete-topic [topic]`\n• `/delete-subtopic [topic] [subtopic]`")
+
+        save_conversation_message(conversation_id, 'user', command)
+        save_conversation_message(conversation_id, 'assistant', response)
+        return ChatResponse(
+            response=response,
+            memory_stored=False,
+            context_used=0,
+            conversation_id=conversation_id
+        )
+    except Exception as e:
+        return ChatResponse(
+            response=f"Error processing command: {str(e)}",
+            memory_stored=False,
+            context_used=0,
+            conversation_id=conversation_id
+        )
+
+# ---------------------- Chat ----------------------
+
+DEFAULT_MODEL = os.getenv("OPENROUTER_DEFAULT_MODEL", "openai/gpt-4o-mini")
+
+class ChatMessage(BaseModel):
+    message: str
+    model: Optional[str] = DEFAULT_MODEL
+    conversation_id: Optional[str] = None
+    web_search: Optional[bool] = False
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat_with_memory(chat_request: ChatMessage, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user["user_id"]
+
+    if chat_request.message.startswith("/"):
+        conversation_id = chat_request.conversation_id or await db_to_thread(create_conversation, user_id)
+        if not conversation_id:
+            return ChatResponse(response="Error creating conversation.", memory_stored=False, context_used=0, conversation_id="")
+        return await handle_slash_command(chat_request.message, user_id, conversation_id)
+
+    conversation_id = chat_request.conversation_id or await db_to_thread(create_conversation, user_id)
+    if not conversation_id:
+        raise HTTPException(status_code=500, detail="Failed to create conversation")
+
+    context = ""
+    if hybrid_memory_system:
+        try:
+            context = await hybrid_memory_system.retrieve_memory(
+                query=chat_request.message,
+                user_id=user_id,
+                conversation_id=conversation_id
+            )
+        except (RuntimeError, ValueError, TypeError) as e:
+            print(f"[MEMORY] retrieve error: {e}")
+            context = ""
+
+    file_query_keywords = ["file", "main.py", "analyze", "code", "script", "upload"]
+    if any(k in chat_request.message.lower() for k in file_query_keywords):
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT filename, content FROM user_files WHERE user_id = %s ORDER BY uploaded_at DESC LIMIT 5",
+                (user_id,)
+            )
+            files = cur.fetchall()
+            cur.close()
+            conn.close()
+            if files:
+                context += "\n\nAvailable files:\n"
+                for filename, content in files:
+                    context += f"\n--- {filename} ---\n{content}\n"
+        except PsycopgError as e:
+            print(f"[FILES] fetch for context DB error: {e}")
+
+    user_first_name = await db_to_thread(get_user_first_name, user_id)
+
+    requested_model = chat_request.model or DEFAULT_MODEL
+    if not await validate_model_access(user_id, requested_model):
+        raise HTTPException(status_code=403, detail=f"Access denied: You don't have permission to use model '{requested_model}'.")
+
+    try:
+        from model_service import ModelService
+        model_service = ModelService()
+        system_content = f"""You are a helpful AI assistant with access to conversation history with {user_first_name or "the user"}.
+
+IMPORTANT: The following are actual previous conversations and messages from your chat history with this user. These are REAL memories:
+
+{context or "No previous conversation history available."}
+
+Instructions:
+- Use the conversation history above to maintain continuity
+- Reference specific details when relevant
+- Be consistent with past interactions
+- If asked about previous conversations, refer to the content above
+- Do not contradict the previous responses shown above"""
+        messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": chat_request.message}
+        ]
+        response_text = await model_service.chat_completion(
+            messages=messages,
+            model=requested_model,
+            web_search=bool(chat_request.web_search)
+        )
+    except httpx.HTTPError as e:
+        print(f"[LLM] HTTP error: {e}")
+        response_text = "I'm having trouble responding right now."
+    except asyncio.TimeoutError as e:
+        print(f"[LLM] timeout: {e}")
+        response_text = "I'm having trouble responding right now."
+    except Exception as e:
+        print(f"[LLM] error: {e}")
+        response_text = "I'm having trouble responding right now."
+
+    user_msg_id = await db_to_thread(save_conversation_message, conversation_id, "user", chat_request.message)
+    assistant_msg_id = await db_to_thread(save_conversation_message, conversation_id, "assistant", response_text)
+
+    assistant_memory_id = None
+    if hybrid_memory_system:
+        try:
+            if user_msg_id:
+                await hybrid_memory_system.store_memory(
+                    content=chat_request.message,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    message_type="user",
+                    message_id=user_msg_id
+                )
+            if assistant_msg_id:
+                assistant_memory_id = await hybrid_memory_system.store_memory(
+                    content=response_text,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    message_type="assistant",
+                    message_id=assistant_msg_id
+                )
+        except (RuntimeError, ValueError, TypeError) as e:
+            print(f"[MEMORY] store error: {e}")
+
+    return ChatResponse(
+        response=response_text,
+        memory_stored=True,
+        context_used=1 if context else 0,
+        conversation_id=conversation_id,
+        assistant_message_id=assistant_memory_id
+    )
+
+# ---------------------- STREAMING ENDPOINT (SSE via OpenRouter) ----------------------
+
+@app.post("/api/chat/stream")
+async def chat_with_memory_stream(chat_request: ChatMessage, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user["user_id"]
+
+    if chat_request.message.startswith("/"):
+        raise HTTPException(status_code=400, detail="Slash commands are not streamed. Use /api/chat.")
+
+    conversation_id = chat_request.conversation_id or await db_to_thread(create_conversation, user_id)
+    if not conversation_id:
+        raise HTTPException(status_code=500, detail="Failed to create conversation")
+
+    context = ""
+    if hybrid_memory_system:
+        try:
+            context = await hybrid_memory_system.retrieve_memory(
+                query=chat_request.message,
+                user_id=user_id,
+                conversation_id=conversation_id
+            )
+        except Exception as e:
+            print(f"[STREAM][MEMORY] retrieve error: {e}")
+
+    file_query_keywords = ["file", "main.py", "analyze", "code", "script", "upload"]
+    if any(k in chat_request.message.lower() for k in file_query_keywords):
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT filename, content FROM user_files WHERE user_id = %s ORDER BY uploaded_at DESC LIMIT 5",
+                (user_id,)
+            )
+            files = cur.fetchall()
+            cur.close()
+            conn.close()
+            if files:
+                context += "\n\nAvailable files:\n"
+                for filename, content in files:
+                    context += f"\n--- {filename} ---\n{content}\n"
+        except PsycopgError as e:
+            print(f"[STREAM][FILES] DB error: {e}")
+
+    requested_model = chat_request.model or DEFAULT_MODEL
+    if not await validate_model_access(user_id, requested_model):
+        raise HTTPException(status_code=403, detail=f"Access denied for requested model '{requested_model}'")
+
+    user_first_name = await db_to_thread(get_user_first_name, user_id)
+    system_content = f"""You are a helpful AI assistant with access to conversation history with {user_first_name or "the user"}.
+
+IMPORTANT: The following are actual previous conversations and messages from your chat history with this user. These are REAL memories:
+
+{context or "No previous conversation history available."}
+
+Instructions:
+- Use the conversation history above to maintain continuity
+- Reference specific details when relevant
+- Be consistent with past interactions
+- If asked about previous conversations, refer to the content above
+- Do not contradict the previous responses shown above"""
+
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": chat_request.message}
+    ]
+
+    user_msg_id = await db_to_thread(save_conversation_message, conversation_id, "user", chat_request.message)
+
+    async def event_stream():
+        assembled: List[str] = []
+        try:
+            headers = {
+                "Authorization": f"Bearer {OPENROUTER_API_KEY or ''}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": requested_model,
+                "messages": messages,
+                "stream": True
+            }
+            url = "https://openrouter.ai/api/v1/chat/completions"
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("POST", url, headers=headers, json=payload) as resp:
+                    if resp.status_code >= 400:
+                        err_text = await resp.aread()
+                        yield f"event: error\ndata: {json.dumps({'status': resp.status_code, 'detail': err_text.decode(errors='ignore')})}\n\n"
+                        return
+
+                    async for raw_line in resp.aiter_lines():
+                        if raw_line is None:
+                            continue
+                        line = raw_line.strip()
+                        if not line:
+                            continue
+                        if line.startswith(":"):
+                            # OpenRouter comment/heartbeat; ignore or forward as you wish
+                            continue
+                        if not line.startswith("data: "):
+                            continue
+
+                        data = line[6:].strip()
+                        if data == "[DONE]":
+                            yield "data: [DONE]\n\n"
+                            break
+
+                        try:
+                            obj = json.loads(data)
+                            delta = obj.get("choices", [{}])[0].get("delta", {})
+                            content_piece = delta.get("content")
+                            if content_piece:
+                                assembled.append(content_piece)
+                                yield f"data: {json.dumps({'delta': content_piece})}\n\n"
+                        except json.JSONDecodeError:
+                            # Ignore non-JSON frames per SSE behavior
+                            continue
+        except asyncio.CancelledError:
+            # Client disconnected, upstream closed
+            raise
+        except Exception as e:
+            yield f"event: error\ndata: {json.dumps({'detail': str(e)})}\n\n"
+        finally:
+            full_text = "".join(assembled).strip()
+            if full_text:
+                assistant_msg_id = await db_to_thread(save_conversation_message, conversation_id, "assistant", full_text)
+                if hybrid_memory_system:
+                    try:
+                        if user_msg_id:
+                            await hybrid_memory_system.store_memory(
+                                content=chat_request.message,
+                                user_id=user_id,
+                                conversation_id=conversation_id,
+                                message_type="user",
+                                message_id=user_msg_id
+                            )
+                        if assistant_msg_id:
+                            await hybrid_memory_system.store_memory(
+                                content=full_text,
+                                user_id=user_id,
+                                conversation_id=conversation_id,
+                                message_type="assistant",
+                                message_id=assistant_msg_id
+                            )
+                    except Exception as me:
+                        print(f"[STREAM][MEMORY] store error: {me}")
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+# ---------------------- Conversations API ----------------------
+
+class ConversationCreate(BaseModel):
+    title: Optional[str] = None
+    topic: Optional[str] = None
+    sub_topic: Optional[str] = None
+
+class ConversationResponse(BaseModel):
+    id: str
+    title: str
+    topic: Optional[str]
+    sub_topic: Optional[str]
+    created_at: str
+    updated_at: str
+    message_count: int
+    last_message: Optional[str] = None
+    last_message_type: Optional[str] = None
+
+class ConversationMessage(BaseModel):
+    id: str
+    message_type: str
+    content: str
+    created_at: str
+
+class MessageListResponse(BaseModel):
+    messages: List[ConversationMessage]
+    total_count: int
+    has_more: bool
+    oldest_id: Optional[str]
+
+class ConversationListResponse(BaseModel):
+    conversations: List[ConversationResponse]
+    total_count: int
+    has_more: bool
+    next_offset: Optional[int]
+
+def get_user_conversations(user_id: str, limit: int = 20, offset: int = 0, topic: Optional[str] = None, sub_topic: Optional[str] = None) -> Dict:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        where_conditions = ['c.user_id = %s']
+        params: List[Any] = [user_id]
+        if topic is not None:
+            topic = topic.lower().strip()
+            where_conditions.append('c.topic = %s')
+            params.append(topic)
+        if sub_topic is not None:
+            sub_topic = sub_topic.lower().strip()
+            where_conditions.append('c.sub_topic = %s')
+            params.append(sub_topic)
+        where_clause = ' AND '.join(where_conditions)
+        count_query = f'SELECT COUNT(*) FROM conversations c WHERE {where_clause}'
+        cur.execute(count_query, params)
+        total_count_row = cur.fetchone()
+        total_count = int(total_count_row[0]) if total_count_row else 0
+
+        main_query = f'''
+            SELECT c.id, c.title, c.topic, c.sub_topic, c.created_at, c.updated_at, c.message_count,
+                   m.content as last_message, m.message_type as last_message_type
+            FROM conversations c
+            LEFT JOIN LATERAL (
+                SELECT content, message_type 
+                FROM conversation_messages 
+                WHERE conversation_id = c.id 
+                ORDER BY created_at DESC 
+                LIMIT 1
+            ) m ON true
+            WHERE {where_clause}
+            ORDER BY c.updated_at DESC
+            LIMIT %s OFFSET %s
+        '''
+        cur.execute(main_query, params + [limit, offset])
+        conversations = []
+        for row in cur.fetchall():
+            conversations.append({
+                'id': row[0],
+                'title': row[1],
+                'topic': row[2],
+                'sub_topic': row[3],
+                'created_at': row[4].isoformat() if row[4] else None,
+                'updated_at': row[5].isoformat() if row[5] else None,
+                'message_count': row[6],
+                'last_message': row[7],
+                'last_message_type': row[8]
+            })
+        return {
+            'conversations': conversations,
+            'total_count': total_count,
+            'has_more': offset + limit < total_count,
+            'next_offset': offset + limit if offset + limit < total_count else None
+        }
+    except PsycopgError as e:
+        print(f"[CONV] list DB error: {e}")
+        return {'conversations': [], 'total_count': 0, 'has_more': False, 'next_offset': None}
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+@app.get("/api/conversations", response_model=ConversationListResponse)
+async def get_conversations(request: Request, limit: int = 20, offset: int = 0, topic: Optional[str] = None, sub_topic: Optional[str] = None):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return get_user_conversations(user['user_id'], limit, offset, topic, sub_topic)
+
+@app.post("/api/conversations/new", response_model=ConversationResponse)
+async def create_new_conversation(request: Request, conversation_data: ConversationCreate):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user['user_id']
+    if conversation_data.topic and conversation_data.sub_topic:
+        count = get_sub_topic_count(user_id, conversation_data.topic)
+        if count >= 5:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Maximum 5 sub-topics allowed per topic. Topic '{conversation_data.topic}' already has {count} sub-topics."
+            )
+    conversation_id = create_conversation(
+        user_id,
+        conversation_data.title,
+        conversation_data.topic,
+        conversation_data.sub_topic
+    )
+    if not conversation_id:
+        raise HTTPException(status_code=500, detail="Failed to create conversation")
+
+    # Return the created conversation row
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT c.id, c.title, c.topic, c.sub_topic, c.created_at, c.updated_at, c.message_count,
+                   m.content as last_message, m.message_type as last_message_type
+            FROM conversations c
+            LEFT JOIN LATERAL (
+                SELECT content, message_type 
+                FROM conversation_messages 
+                WHERE conversation_id = c.id 
+                ORDER BY created_at DESC 
+                LIMIT 1
+            ) m ON true
+            WHERE c.id = %s AND c.user_id = %s
+        """, (conversation_id, user_id))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=500, detail="Created conversation not found")
+        return {
+            'id': row[0],
+            'title': row[1],
+            'topic': row[2],
+            'sub_topic': row[3],
+            'created_at': row[4].isoformat() if row[4] else None,
+            'updated_at': row[5].isoformat() if row[5] else None,
+            'message_count': row[6],
+            'last_message': row[7],
+            'last_message_type': row[8]
+        }
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+@app.get("/api/conversations/{conversation_id}/messages", response_model=MessageListResponse)
+async def get_conversation_messages_endpoint(conversation_id: str, request: Request, limit: int = 30, before_id: Optional[str] = None):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return get_conversation_messages_db(conversation_id, limit, before_id)
+
+@app.get("/api/conversations/{conversation_id}/messages/all", response_model=List[ConversationMessage])
+async def get_conversation_messages_all_endpoint(conversation_id: str, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return get_conversation_messages_all_db(conversation_id)
+
+class ConversationTopicUpdate(BaseModel):
+    topic: Optional[str] = None
+    sub_topic: Optional[str] = None
+
+@app.put("/api/conversations/{conversation_id}/topic")
+async def update_conversation_topic_endpoint(conversation_id: str, request: Request, topic_data: ConversationTopicUpdate):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    # Ownership check (basic)
+    data = get_user_conversations(user['user_id'], limit=1000)
+    if not any(conv['id'] == conversation_id for conv in data['conversations']):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    ok = update_conversation_topic_db(conversation_id, topic_data.topic, topic_data.sub_topic)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to update conversation topic")
+    return {"success": True, "conversation_id": conversation_id, "topic": topic_data.topic, "sub_topic": topic_data.sub_topic}
+
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation_endpoint(conversation_id: str, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user['user_id']
+
+    # Ownership check (basic)
+    data = get_user_conversations(user_id, limit=1000)
+    if not any(conv['id'] == conversation_id for conv in data['conversations']):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # Neo4j cleanup if present
+    try:
+        if hybrid_memory_system and getattr(hybrid_memory_system, "neo4j_available", False):
+            with hybrid_memory_system.neo4j_driver.session() as session:
+                session.run("""
+                    MATCH (m:IntelligentMemory)
+                    WHERE m.conversation_id = $conversation_id AND m.user_id = $user_id
+                    DELETE m
+                """, {'conversation_id': conversation_id, 'user_id': user_id})
+    except Exception as e:
+        print(f"[CONV] Neo4j cleanup error: {e}")
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # Gather memory ids to remove links
+        cur.execute("SELECT id FROM intelligent_memories WHERE conversation_id = %s AND user_id = %s", (conversation_id, user_id))
+        mem_ids = [r[0] for r in cur.fetchall()]
+        if mem_ids:
+            placeholders = ','.join(['%s'] * len(mem_ids))
+            cur.execute(f"""
+                DELETE FROM memory_links 
+                WHERE user_id = %s 
+                AND source_memory_id IN ({placeholders})
+            """, [user_id] + mem_ids)
+        cur.execute("DELETE FROM intelligent_memories WHERE conversation_id = %s AND user_id = %s", (conversation_id, user_id))
+        cur.execute("DELETE FROM conversation_messages WHERE conversation_id = %s", (conversation_id,))
+        cur.execute("DELETE FROM conversations WHERE id = %s AND user_id = %s", (conversation_id, user_id))
+        conn.commit()
+        return {"success": True, "message": "Conversation and memories deleted successfully"}
+    except PsycopgError as e:
+        print(f"[CONV] delete DB error: {e}")
+        raise HTTPException(status_code=500, detail="Deletion failed")
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+# ---------------------- Topics API ----------------------
+
+class TopicCreate(BaseModel):
+    name: str
+
+class SubtopicCreate(BaseModel):
+    name: str
+
+@app.get("/api/topics")
+async def get_topics_endpoint(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return get_all_topics(user['user_id'])
+
+@app.post("/api/topics")
+async def create_topic_endpoint(request: Request, topic_data: TopicCreate):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not topic_data.name or not topic_data.name.strip():
+        raise HTTPException(status_code=400, detail="Topic name cannot be empty")
+    success = create_topic_entry(user['user_id'], topic_data.name)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to create topic")
+    return {"success": True, "topic": topic_data.name.lower().strip()}
+
+@app.post("/api/topics/{topic}/subtopics")
+async def create_subtopic_endpoint(request: Request, topic: str, subtopic_data: SubtopicCreate):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not subtopic_data.name or not subtopic_data.name.strip():
+        raise HTTPException(status_code=400, detail="Sub-topic name cannot be empty")
+    topics = get_all_topics(user['user_id'])
+    if topic.lower() not in topics:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    if get_sub_topic_count(user['user_id'], topic) >= 5:
+        raise HTTPException(status_code=400, detail="Maximum 5 sub-topics allowed per topic")
+    success = create_subtopic_entry(user['user_id'], topic, subtopic_data.name)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to create sub-topic")
+    return {"success": True, "topic": topic.lower(), "sub_topic": subtopic_data.name.lower().strip()}
+
+@app.delete("/api/topics/{topic_name}")
+async def delete_topic_endpoint(topic_name: str, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    success = delete_topic_and_data(user['user_id'], topic_name.lower())
+    if success:
+        return {"success": True, "message": f"Topic '{topic_name}' has been permanently deleted."}
+    else:
+        raise HTTPException(status_code=400, detail=f"Error deleting topic '{topic_name}'.")
+
+@app.delete("/api/topics/{topic_name}/subtopics/{subtopic_name}")
+async def delete_subtopic_endpoint(topic_name: str, subtopic_name: str, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    success = delete_subtopic_and_data(user['user_id'], topic_name.lower(), subtopic_name.lower())
+    if success:
+        return {"success": True, "message": f"Subtopic '{subtopic_name}' deleted from '{topic_name}'."}
+    else:
+        raise HTTPException(status_code=400, detail=f"Error deleting subtopic '{subtopic_name}'.")
+
+# ---------------------- Password Reset ----------------------
+
+@app.get("/forgot-password")
+async def forgot_password_page():
+    return FileResponse("static/forgot_password.html") if Path("static/forgot_password.html").exists() else HTMLResponse("<h1>Forgot Password UI not deployed</h1>")
+
+@app.post("/api/forgot-password")
+async def request_password_reset(identifier: str = Form(...), method: str = Form(...)):
+    try:
+        user = password_reset_service.find_user_by_username_or_email(identifier)
+        if not user:
+            return HTMLResponse("<h2>User Not Found</h2><a href='/forgot-password'>Try Again</a>")
+        if method == "email":
+            if not user.get('email'):
+                return HTMLResponse("<h2>Email Not Available</h2><a href='/forgot-password'>Try Again</a>")
+            contact_info = user['email']
+        elif method == "instant":
+            contact_info = f"user:{user['username']}"
+        else:
+            return HTMLResponse("<h2>Invalid Method</h2><a href='/forgot-password'>Try Again</a>")
+
+        token, code = password_reset_service.create_reset_token(user['id'], method, contact_info)
+        if not token:
+            return HTMLResponse("<h2>Error</h2><a href='/forgot-password'>Try Again</a>")
+        ok = False
+        if method == "email":
+            ok = send_free_email_notification(contact_info, code, token)
+        elif method == "instant":
+            ok = send_free_instant_notification(code, user['username'])
+        if ok:
+            return RedirectResponse(url=f"/verify-reset?token={token}", status_code=302)
+        else:
+            return HTMLResponse(f"<h2>Service Unavailable</h2><a href='/forgot-password'>Try Again</a>")
+    except Exception as e:
+        print(f"[RESET] request error: {e}")
+        return HTMLResponse("<h2>Error</h2><a href='/forgot-password'>Try Again</a>")
+
+@app.get("/verify-reset")
+async def verify_reset_page(token: str):
+    return FileResponse("static/verify_reset.html") if Path("static/verify_reset.html").exists() else HTMLResponse(f"<h1>Verify Reset UI not deployed</h1><p>Token: {token}</p>")
+
+@app.post("/api/verify-reset")
+async def verify_reset_code(
+    token: str = Form(...),
+    code: str = Form(...),
+    new_password: str = Form(...),
+    confirm_password: str = Form(...)
+):
+    try:
+        if new_password != confirm_password:
+            return HTMLResponse(f"<h2>Password Mismatch</h2><a href='/verify-reset?token={token}'>Try Again</a>")
+        if len(new_password) < 6:
+            return HTMLResponse(f"<h2>Password Too Short</h2><a href='/verify-reset?token={token}'>Try Again</a>")
+        reset_data = password_reset_service.verify_reset_token(token, code)
+        if not reset_data:
+            return HTMLResponse("<h2>Invalid Code</h2><a href='/forgot-password'>Request New Code</a>")
+        ok = password_reset_service.update_user_password(reset_data['user_id'], new_password)
+        if ok:
+            password_reset_service.mark_token_used(token)
+            return HTMLResponse("<h2>Password Reset Successful</h2><a href='/login'>Login</a>")
+        else:
+            return HTMLResponse(f"<h2>Error</h2><a href='/verify-reset?token={token}'>Try Again</a>")
+    except Exception as e:
+        print(f"[RESET] verify error: {e}")
+        return HTMLResponse("<h2>Error</h2><a href='/forgot-password'>Request New Code</a>")
+
+# ---------------------- User Profile ----------------------
+
+@app.get("/api/user/name")
+async def get_user_name_endpoint(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user['user_id']
+    first = get_user_first_name(user_id)
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT feedback_score FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+        score = row[0] if row else 0
+    except PsycopgError as e:
+        print(f"[USER] score DB error: {e}")
+        score = 0
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+    return {"first_name": first, "feedback_score": score}
+
+@app.get("/api/user/profile")
+async def get_user_profile_endpoint(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user['user_id']
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT username, email, created_at, feedback_score
+            FROM users WHERE id = %s
+        """, (user_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="User not found")
+        username, email, created_at, feedback_score = row
+        initial = username[0].upper() if username else "U"
+        return {
+            "username": username,
+            "display_name": username,
+            "email": email,
+            "initial": initial,
+            "feedback_score": feedback_score or 0,
+            "created_at": created_at.isoformat() if created_at else None,
+            "last_login": None
+        }
+    except PsycopgError as e:
+        print(f"[USER] profile DB error: {e}")
+        raise HTTPException(status_code=500, detail="Error getting user profile")
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+@app.put("/api/user/profile")
+async def update_user_profile_endpoint(request: Request, profile_data: dict):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user['user_id']
+    display_name = (profile_data.get("display_name") or "").strip()
+    if not display_name:
+        return {"success": True}
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE users SET username = %s WHERE id = %s", (display_name, user_id))
+        conn.commit()
+        return {"success": True, "message": "Profile updated successfully"}
+    except PsycopgError as e:
+        print(f"[USER] update profile DB error: {e}")
+        raise HTTPException(status_code=500, detail="Error updating profile")
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+@app.get("/api/user/emails")
+async def get_user_emails_endpoint(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user['user_id']
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT email FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+        emails = []
+        if row and row[0]:
+            emails.append({"email": row[0], "is_primary": True, "is_verified": True})
+        return {"emails": emails}
+    except PsycopgError as e:
+        print(f"[USER] emails DB error: {e}")
+        raise HTTPException(status_code=500, detail="Error getting emails")
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+@app.post("/api/user/password")
+async def update_password_endpoint(request: Request, password_data: dict):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user['user_id']
+    current_password = password_data.get("current_password")
+    new_password = password_data.get("new_password")
+    if not current_password or not new_password:
+        raise HTTPException(status_code=400, detail="Current and new passwords are required")
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT password_hash FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="User not found")
+        if not pwd_context.verify(current_password, row[0]):
+            raise HTTPException(status_code=400, detail="Current password is incorrect")
+        new_hash = pwd_context.hash(new_password)
+        cur.execute("UPDATE users SET password_hash = %s WHERE id = %s", (new_hash, user_id))
+        conn.commit()
+        return {"success": True, "message": "Password updated successfully"}
+    except PsycopgError as e:
+        print(f"[USER] password update DB error: {e}")
+        raise HTTPException(status_code=500, detail="Error updating password")
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+# ---------------------- Models and Access Control ----------------------
+
+async def get_user_api_capabilities(user_id: str) -> Dict:
+    await asyncio.sleep(0)
+    try:
+        openrouter_key = (vault.get_secret(user_id, 'api_key', 'openrouter') or 
+                          vault.get_secret(user_id, 'general', 'OPENROUTER_API_KEY') or
+                          vault.get_secret(user_id, 'general', 'OPEN_ROUTER_KEY'))
+        openai_key = (vault.get_secret(user_id, 'api_key', 'openai') or 
+                      vault.get_secret(user_id, 'general', 'OPENAI_API_KEY'))
+        has_openrouter = bool(openrouter_key and openrouter_key.strip())
+        has_openai = bool(openai_key and openai_key.strip())
+        if has_openrouter and has_openai:
+            tier = "premium"
+        elif has_openrouter:
+            tier = "openrouter"
+        elif has_openai:
+            tier = "openai"
+        else:
+            tier = "free"
+        return {"tier": tier, "has_openrouter": has_openrouter, "has_openai": has_openai}
+    except Exception as e:
+        print(f"[CAP] error: {e}")
+        return {"tier": "free", "has_openrouter": False, "has_openai": False}
+
+@app.get("/api/models")
+async def get_available_models(request: Request):
+    try:
+        from model_service import ModelService, filter_models_by_tier
+        model_service = ModelService()
+        all_models = model_service.get_models()
+        user = get_authenticated_user(request)
+        tier = "free"
+        if user:
+            caps = await get_user_api_capabilities(user["user_id"])
+            tier = caps.get("tier", "free")
+        filtered = filter_models_by_tier(all_models, tier)
+        filtered.sort(key=lambda x: (x.get("name", "") or "").lower())
+        return filtered
+    except Exception as e:
+        print(f"[MODELS] error: {e}")
+        return [
+            {"id": "meta-llama/llama-3.2-3b-instruct:free", "name": "Llama 3.2 3B (Free)", "description": "Free model"},
+            {"id": "google/gemini-2.0-flash-001:free", "name": "Gemini 2.0 Flash (Free)", "description": "Free Google model"}
+        ]
+
+async def validate_model_access(user_id: str, model_id: str) -> bool:
+    try:
+        from model_service import get_model_tier
+        caps = await get_user_api_capabilities(user_id)
+        tier = caps.get("tier", "free")
+        mt = get_model_tier(model_id)
+        if tier == "free":
+            return mt == "free"
+        if tier == "openai":
+            return mt in ("free", "openai")
+        if tier == "openrouter":
+            return mt in ("free", "openrouter")
+        if tier == "premium":
+            return True
+        return mt == "free"
+    except Exception as e:
+        print(f"[ACCESS] validate error: {e}")
+        return False
+
+# ---------------------- Memory Utilities ----------------------
+
+@app.post("/api/clear-memory")
+async def clear_memory_database():
+    try:
+        if hybrid_memory_system and getattr(hybrid_memory_system, "neo4j_available", False):
+            with hybrid_memory_system.neo4j_driver.session() as session:
+                session.run("MATCH (n) DETACH DELETE n")
+        return {"status": "success", "message": "All memory data cleared from database"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error clearing database: {str(e)}")
+
+# ---------------------- RIAI Test ----------------------
+
+@app.post("/api/test-riai")
+async def test_riai_scoring(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not (HAVE_RIAI and process_hybrid_riai_batch):
+        raise HTTPException(status_code=500, detail="RIAI system not available")
+    result = await process_hybrid_riai_batch()
+    if not isinstance(result, dict):
+        total_found = cached = evaluated = 0
+    else:
+        total_found = int(result.get('total_found') or 0)
+        cached = int(result.get('cached') or 0)
+        evaluated = int(result.get('evaluated') or 0)
+    return {
+        "status": "success",
+        "riai_results": result,
+        "message": f"Background R(t): {total_found} found, {cached} cached, {evaluated} evaluated"
+    }
+
+# ---------------------- Feedback ----------------------
+
+class FeedbackRequest(BaseModel):
+    message_id: str
+    feedback_type: str  # 'great_response', 'that_worked', 'not_helpful', 'like', 'dislike'
+
+@app.post("/api/feedback")
+async def submit_feedback(feedback_request: FeedbackRequest, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user["user_id"]
+    valid = ['great_response', 'that_worked', 'not_helpful', 'like', 'dislike']
+    if feedback_request.feedback_type not in valid:
+        raise HTTPException(status_code=400, detail="Invalid feedback type")
+    if not hybrid_memory_system:
+        raise HTTPException(status_code=500, detail="Memory system not available")
+
+    scores = {'not_helpful': -3.0, 'like': 1.5, 'great_response': 1.5, 'that_worked': 2.5, 'dislike': -3.0}
+    score = scores[feedback_request.feedback_type]
+    ok = await hybrid_memory_system.update_human_feedback_by_node_id(
+        node_id=feedback_request.message_id,
+        feedback_score=score,
+        feedback_type=feedback_request.feedback_type,
+        user_id=user_id
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Message not found or update failed")
+
+    await hybrid_memory_system.update_final_quality_score(
+        memory_id=feedback_request.message_id,
+        user_id=user_id,
+    )
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT uf_score_awarded FROM intelligent_memories WHERE id = %s AND user_id = %s", (feedback_request.message_id, user_id))
+        row = cur.fetchone()
+        if row and (row[0] is False):
+            cur.execute("UPDATE users SET feedback_score = feedback_score + 1 WHERE id = %s", (user_id,))
+            cur.execute("UPDATE intelligent_memories SET uf_score_awarded = TRUE WHERE id = %s AND user_id = %s", (feedback_request.message_id, user_id))
+            conn.commit()
+        cur.close()
+        conn.close()
+    except PsycopgError as e:
+        print(f"[FEEDBACK] UF score DB error: {e}")
+
+    return {"status": "success", "message": f"Feedback recorded: {feedback_request.feedback_type}", "h_t_score": score}
+
+class ImplicitFeedbackRequest(BaseModel):
+    message_id: str
+    action_type: str  # 'copy', 'continue', 'followup'
+    feedback_score: float  # -1.0 .. 1.0
+
+@app.post("/api/feedback-implicit")
+async def submit_implicit_feedback(payload: ImplicitFeedbackRequest, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user["user_id"]
+    if payload.action_type not in ['copy', 'continue', 'followup']:
+        raise HTTPException(status_code=400, detail="Invalid action type")
+    if not (-1.0 <= payload.feedback_score <= 1.0):
+        raise HTTPException(status_code=400, detail="Score must be between -1.0 and 1.0")
+    if not hybrid_memory_system:
+        return {"status": "skipped", "message": "Memory system not available"}
+
+    ok = await hybrid_memory_system.update_human_feedback_by_node_id(
+        node_id=payload.message_id,
+        feedback_score=payload.feedback_score,
+        feedback_type=f"implicit_{payload.action_type}",
+        user_id=user_id
+    )
+    if ok:
+        await hybrid_memory_system.update_final_quality_score(payload.message_id, user_id)
+        return {"status": "success", "message": f"Implicit feedback recorded: {payload.action_type}", "h_t_score": payload.feedback_score}
+    else:
+        return {"status": "skipped", "message": "Message not found or already updated"}
+
+# ---------------------- Files ----------------------
+
+@app.post("/api/upload-file")
+async def upload_file(request: Request, file: UploadFile = File(...)):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user["user_id"]
+    content = await file.read()
+    text = content.decode("utf-8", errors="replace")
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("INSERT INTO user_files (user_id, filename, content, file_type) VALUES (%s, %s, %s, %s)", (user_id, file.filename, text, file.content_type))
+        conn.commit()
+        return {"message": f"File {file.filename} uploaded successfully"}
+    except PsycopgError as e:
+        print(f"[FILES] upload DB error: {e}")
+        raise HTTPException(status_code=500, detail="Upload failed")
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+@app.get("/api/download/{filename}")
+def download_file(filename: str, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user["user_id"]
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT content, file_type FROM user_files WHERE user_id = %s AND filename = %s", (user_id, filename))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="File not found")
+        content, file_type = row
+        headers = {"Content-Disposition": f'attachment; filename="{filename}"', "Content-Type": file_type or "application/octet-stream"}
+        return Response(content=content, headers=headers)
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+@app.get("/api/user-files")
+def get_user_files(request: Request, search: Optional[str] = None):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user["user_id"]
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        if search:
+            cur.execute("""
+                SELECT id, filename, file_type, uploaded_at, LEFT(content, 100) as content_preview
+                FROM user_files
+                WHERE user_id = %s AND filename ILIKE %s
+                ORDER BY uploaded_at DESC
+            """, (user_id, f"%{search}%"))
+        else:
+            cur.execute("""
+                SELECT id, filename, file_type, uploaded_at, LEFT(content, 100) as content_preview
+                FROM user_files
+                WHERE user_id = %s
+                ORDER BY uploaded_at DESC
+            """, (user_id,))
+        files = []
+        for row in cur.fetchall():
+            preview = row[4] or ""
+            files.append({
+                "id": row[0],
+                "filename": row[1],
+                "file_type": row[2],
+                "uploaded_at": row[3].isoformat() if row[3] else None,
+                "content_preview": (preview + "...") if len(preview) == 100 else preview
+            })
+        return files
+    except PsycopgError as e:
+        print(f"[FILES] list DB error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get files")
+    finally:
+        try:
+            cur.close()
+        except psycopg2.Error:
+            pass
+        conn.close()
+
+# ---------------------- Secrets Vault ----------------------
+
+@app.post("/api/secrets/store")
+async def store_secret_endpoint(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user['user_id']
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    secret_type = data.get('secret_type')
+    secret_name = data.get('secret_name')
+    secret_value = data.get('secret_value')
+    metadata = data.get('metadata', {})
+    if not all([secret_type, secret_name, secret_value]):
+        raise HTTPException(status_code=400, detail="Missing required fields")
+    success = vault.store_secret(user_id, secret_type, secret_name, secret_value, metadata)
+    if success:
+        return {"success": True, "message": "Secret stored successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to store secret")
+
+@app.get("/api/secrets/list")
+async def list_secrets_endpoint(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user['user_id']
+    secret_type = request.query_params.get('type')
+    secrets = vault.list_user_secrets(user_id, secret_type or None)
+    return {"secrets": secrets}
+
+@app.get("/api/secrets/{secret_type}/{secret_name}")
+async def get_secret_endpoint(secret_type: str, secret_name: str, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user['user_id']
+    value = vault.get_secret(user_id, secret_type, secret_name)
+    if value is None:
+        raise HTTPException(status_code=404, detail="Secret not found")
+    return {"secret_value": value}
+
+@app.delete("/api/secrets/{secret_type}/{secret_name}")
+async def delete_secret_endpoint(secret_type: str, secret_name: str, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user['user_id']
+    success = vault.delete_secret(user_id, secret_type, secret_name)
+    if success:
+        return {"success": True, "message": "Secret deleted successfully"}
+    else:
+        raise HTTPException(status_code=404, detail="Secret not found")
+
+@app.post("/api/secrets/rotate")
+async def rotate_secret_endpoint(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user['user_id']
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    secret_type = data.get('secret_type')
+    secret_name = data.get('secret_name')
+    new_value = data.get('new_value')
+    if not all([secret_type, secret_name, new_value]):
+        raise HTTPException(status_code=400, detail="Missing required fields")
+    success = vault.rotate_secret(user_id, secret_type, secret_name, new_value)
+    if success:
+        return {"success": True, "message": "Secret rotated successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to rotate secret")
+
+@app.get("/api/secrets/access-log")
+async def get_access_log_endpoint(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user['user_id']
+    limit = int(request.query_params.get('limit', 50))
+    access_log = vault.get_access_log(user_id, limit)
+    return {"access_log": access_log}
+
+# ---------------------- API Keys (via Vault) ----------------------
+
+@app.post("/api/api-keys/store")
+async def store_api_key_endpoint(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user['user_id']
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    provider = data.get('provider')
+    api_key_value = data.get('api_key')
+    if not all([provider, api_key_value]):
+        raise HTTPException(status_code=400, detail="Missing provider or API key")
+    success = store_api_key(user_id, provider, api_key_value)
+    if success:
+        return {"success": True, "message": f"{provider} API key stored successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to store API key")
+
+@app.get("/api/api-keys/list")
+async def list_api_keys_endpoint(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user['user_id']
+    api_keys = list_api_keys(user_id)
+    safe = []
+    for k in api_keys:
+        safe.append({
+            "provider": k.get("secret_name"),
+            "created_at": k.get("created_at"),
+            "updated_at": k.get("updated_at"),
+            "masked_key": (k.get("metadata", {}) or {}).get("masked_key", "sk-..."),
+            "rotation_count": (k.get("metadata", {}) or {}).get("rotation_count", 0)
+        })
+    return {"api_keys": safe}
+
+@app.delete("/api/api-keys/{provider}")
+async def delete_api_key_endpoint(provider: str, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user['user_id']
+    success = delete_api_key(user_id, provider)
+    if success:
+        return {"success": True, "message": f"{provider} API key deleted successfully"}
+    else:
+        raise HTTPException(status_code=404, detail="API key not found")
+
+@app.post("/api/api-keys/rotate")
+async def rotate_api_key_endpoint(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user['user_id']
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    provider = data.get('provider')
+    new_key = data.get('new_key')
+    if not all([provider, new_key]):
+        raise HTTPException(status_code=400, detail="Missing provider or new key")
+    success = rotate_api_key(user_id, provider, new_key)
+    if success:
+        return {"success": True, "message": f"{provider} API key rotated successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to rotate API key")
+
+# ---------------------- Training APIs ----------------------
+
+@app.get("/api/training/analyze/{user_id}")
+async def analyze_training_potential_endpoint(user_id: str, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not analyze_user_training_potential:
+        raise HTTPException(status_code=503, detail="Training analysis unavailable")
+    try:
+        result = await analyze_user_training_potential(user_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
+@app.post("/api/training/prepare/{user_id}")
+async def prepare_training_data_endpoint(user_id: str, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not prepare_user_training_data:
+        raise HTTPException(status_code=503, detail="Training preparation unavailable")
+    try:
+        result = await prepare_user_training_data(user_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Data preparation failed: {str(e)}")
+
+@app.post("/api/training/start")
+async def start_training_endpoint(request: Request, train_file: str = Form(...), val_file: str = Form(...)):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not start_fine_tuning:
+        raise HTTPException(status_code=503, detail="Training unavailable")
+    try:
+        result = await start_fine_tuning(train_file, val_file)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Training failed to start: {str(e)}")
+
+@app.get("/api/training/status/{job_id}")
+async def check_training_status_endpoint(job_id: str, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not check_fine_tuning_status:
+        raise HTTPException(status_code=503, detail="Status unavailable")
+    try:
+        status = await check_fine_tuning_status(job_id)
+        return status
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Status check failed: {str(e)}")
+
+@app.get("/api/training/scheduler/status")
+async def get_scheduler_status_endpoint(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        status = await get_training_status() if asyncio.iscoroutinefunction(get_training_status) else get_training_status()
+        return status
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Scheduler status failed: {str(e)}")
+
+@app.post("/api/training/scheduler/trigger")
+async def trigger_training_endpoint(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        result = await trigger_manual_training() if asyncio.iscoroutinefunction(trigger_manual_training) else trigger_manual_training()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Training trigger failed: {str(e)}")
+
+@app.get("/api/training/user-model/{user_id}")
+async def get_user_model_endpoint(user_id: str, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        model_id = get_user_custom_model(user_id)
+        return {"user_id": user_id, "custom_model": model_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Model lookup failed: {str(e)}")
+
+# ---------------------- Personal Models ----------------------
+
+try:
+    from personal_models_config import PERSONAL_MODELS_CONFIG
+except Exception:
+    PERSONAL_MODELS_CONFIG = {}
+
+@app.get("/api/personal-models/available")
+async def get_available_personal_models(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        if personal_model_manager:
+            models = await personal_model_manager.get_available_models()
+            return {"models": models}
+        else:
+            models = list(PERSONAL_MODELS_CONFIG.values())
+            return {"models": models}
+    except Exception as e:
+        print(f"[PMM] available error: {e}")
+        return {"models": list(PERSONAL_MODELS_CONFIG.values())}
+
+@app.get("/api/personal-models/user")
+async def get_user_personal_models(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        if personal_model_manager:
+            models = await personal_model_manager.get_user_models(user['user_id'])
+            return {"models": models}
+        return {"models": []}
+    except Exception as e:
+        print(f"[PMM] user models error: {e}")
+        return {"models": []}
+
+@app.post("/api/personal-models/add")
+async def add_personal_model(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not personal_model_manager:
+        raise HTTPException(status_code=503, detail="Personal model manager unavailable")
+    try:
+        data = await request.json()
+        model_id = data.get('model_id')
+        custom_name = data.get('custom_name')
+        if not model_id:
+            raise HTTPException(status_code=400, detail="Model ID is required")
+        result = await personal_model_manager.add_model_to_user(user['user_id'], model_id, custom_name)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to add model: {str(e)}")
+
+@app.delete("/api/personal-models/{model_id}")
+async def remove_personal_model(model_id: str, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not personal_model_manager:
+        raise HTTPException(status_code=503, detail="Personal model manager unavailable")
+    try:
+        result = await personal_model_manager.remove_model_from_user(user['user_id'], model_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to remove model: {str(e)}")
+
+@app.post("/api/personal-models/{model_id}/train")
+async def train_personal_model(model_id: str, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not personal_model_manager:
+        raise HTTPException(status_code=503, detail="Personal model manager unavailable")
+    try:
+        result = await personal_model_manager.start_model_training(user['user_id'], model_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start training: {str(e)}")
+
+@app.get("/api/personal-models/training-jobs")
+async def get_training_jobs(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not personal_model_manager:
+        return {"jobs": []}
+    try:
+        jobs = await personal_model_manager.get_training_jobs(user['user_id'])
+        return {"jobs": jobs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get training jobs: {str(e)}")
+
+@app.get("/api/personal-models/analytics")
+async def get_model_analytics(request: Request, model_id: str = None):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not personal_model_manager:
+        return {"usage": []}
+    try:
+        analytics = await personal_model_manager.get_usage_analytics(user['user_id'], model_id)
+        return analytics
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get analytics: {str(e)}")
+
+@app.post("/api/personal-models/{model_id}/usage")
+async def record_model_usage(model_id: str, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not personal_model_manager:
+        return {"status": "skipped"}
+    try:
+        data = await request.json()
+        await personal_model_manager.record_model_usage(
+            user['user_id'],
+            model_id,
+            data.get('usage_type', 'chat'),
+            data.get('response_time_ms', 0),
+            data.get('quality_rating')
+        )
+        return {"status": "recorded"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to record usage: {str(e)}")
+
+# ---------------------- Desktop App Integration ----------------------
+
+@app.get("/api/desktop/connection-status")
+async def get_desktop_connection_status(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not desktop_connector:
+        return {"connected": False, "error": "Desktop connector not available"}
+    try:
+        status = await desktop_connector.get_user_connection_status(user['user_id'])
+        return status
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get connection status: {str(e)}")
+
+@app.post("/api/desktop/request-download/{model_id}")
+async def request_desktop_model_download(model_id: str, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not desktop_connector:
+        raise HTTPException(status_code=503, detail="Desktop connector not available")
+    try:
+        result = await desktop_connector.request_model_download(user['user_id'], model_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to request download: {str(e)}")
+
+@app.post("/api/desktop/request-training/{model_id}")
+async def request_desktop_model_training(model_id: str, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not desktop_connector:
+        raise HTTPException(status_code=503, detail="Desktop connector not available")
+    try:
+        data = await request.json()
+        training_data = data.get('training_data', '')
+        result = await desktop_connector.request_model_training(user['user_id'], model_id, training_data)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to request training: {str(e)}")
+
+@app.post("/api/desktop/chat/{model_id}")
+async def chat_with_desktop_model(model_id: str, request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not desktop_connector:
+        raise HTTPException(status_code=503, detail="Desktop connector not available")
+    try:
+        data = await request.json()
+        message = data.get('message', '')
+        conversation_id = data.get('conversation_id')
+        result = await desktop_connector.chat_with_local_model(user['user_id'], model_id, message, conversation_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send chat message: {str(e)}")
+
+@app.get("/api/desktop/requests")
+async def get_desktop_requests(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not desktop_connector:
+        return {"requests": []}
+    try:
+        reqs = await desktop_connector.get_pending_requests(user['user_id'])
+        return {"requests": reqs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get requests: {str(e)}")
+
+@app.get("/api/desktop/status")
+async def get_desktop_status(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not desktop_connector:
+        return {"connected": False, "error": "Desktop connector not available"}
+    try:
+        status = await desktop_connector.get_user_connection_status(user['user_id'])
+        return {"connected": status.get('connected', False)}
+    except Exception as e:
+        return {"connected": False, "error": str(e)}
+
+@app.post("/api/desktop/download-model")
+async def download_model_to_desktop(request: Request):
+    user = get_authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not desktop_connector:
+        raise HTTPException(status_code=503, detail="Desktop connector not available")
+    try:
+        data = await request.json()
+        model_id = data.get('model_id')
+        model_name = data.get('model_name', model_id)
+        if not model_id:
+            raise HTTPException(status_code=400, detail="model_id is required")
+        result = await desktop_connector.request_model_download(user['user_id'], model_id)
+        return {"success": True, "message": f"Download request sent for {model_name}", "result": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.get("/desktop-app-download")
+async def serve_desktop_app_download():
+    return FileResponse("desktop-app-download.html") if Path("desktop-app-download.html").exists() else HTMLResponse("<h1>Desktop app page not deployed</h1>")
+
+@app.get("/api/desktop/build-status")
+async def get_desktop_build_status():
+    try:
+        desktop_app_dir = Path("desktop-app")
+        dist_dir = desktop_app_dir / "dist"
+        downloads: Dict[str, Dict[str, Any]] = {}
+        if dist_dir.exists():
+            for item in dist_dir.iterdir():
+                if item.is_file():
+                    name = item.name.lower()
+                    meta = {
+                        'filename': item.name,
+                        'size': item.stat().st_size,
+                        'url': f'/downloads/{item.name}',
+                        'version': '1.0.0'
+                    }
+                    if name.endswith(('.exe', '.msi')):
+                        downloads['windows'] = meta
+                    elif name.endswith(('.dmg', '.pkg')):
+                        downloads['macos'] = meta
+                    elif name.endswith(('.appimage', '.deb', '.rpm', '.tar.gz')):
+                        downloads['linux'] = meta
+        return {
+            "builds_available": len(downloads) > 0,
+            "downloads": downloads,
+            "last_build": datetime.now().isoformat() if downloads else None
+        }
+    except Exception as e:
+        return {"builds_available": False, "downloads": {}, "error": str(e)}
+
+@app.get("/downloads/{filename}")
+async def download_installer(filename: str):
+    try:
+        desktop_app_dir = Path("desktop-app")
+        dist_dir = desktop_app_dir / "dist"
+        file_path = dist_dir / filename
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="Installer not found")
+        return FileResponse(file_path, media_type='application/octet-stream', filename=filename)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Download error: {str(e)}")
+
+@app.post("/api/desktop/build")
+async def trigger_desktop_build():
+    try:
+        import subprocess
+        process = await asyncio.create_subprocess_exec(
+            'python', 'desktop_app_builder.py',
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        return {"success": True, "message": "Build process started", "build_id": f"build_{int(time.time())}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+# ---------------------- WebSocket: Desktop ----------------------
+
+@app.websocket("/ws/desktop")
+async def websocket_desktop_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    connection_id = None
+    try:
+        registration_data = await websocket.receive_text()
+        reg = json.loads(registration_data)
+        if reg.get('type') != 'register':
+            await websocket.send_text(json.dumps({'type': 'error', 'message': 'First message must be registration'}))
+            return
+        user_id = reg.get('user_id', f"temp_{uuid.uuid4().hex[:8]}")
+        if not desktop_connector:
+            await websocket.send_text(json.dumps({'type': 'error', 'message': 'Desktop connector not available'}))
+            return
+        connection_id = await desktop_connector.register_connection(websocket, user_id, reg.get('data', {}))
+        await websocket.send_text(json.dumps({'type': 'registered', 'connection_id': connection_id, 'message': 'Connected'}))
+        while True:
+            try:
+                msg = await websocket.receive_text()
+                data = json.loads(msg)
+                if data.get('type') == 'model_status_update':
+                    await desktop_connector.update_model_status(connection_id, data.get('data', {}))
+                elif data.get('type') == 'chat_response':
+                    await desktop_connector.handle_chat_response(connection_id, data.get('data', {}))
+            except Exception:
+                break
+    except Exception as e:
+        print(f"[WS] desktop error: {e}")
+    finally:
+        if desktop_connector and connection_id:
+            await desktop_connector.unregister_connection(connection_id)
+
+# ---------------------- Health ----------------------
+
+@app.get("/health")
+def health_check():
+    return {"status": "healthy", "service": "NeuroLM Memory System"}
+
+# ---------------------- Main ----------------------
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", "5000"))
+    uvicorn.run(app, host="0.0.0.0", port=port)

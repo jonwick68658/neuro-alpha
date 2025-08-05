@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <linearGradient id="targetGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="25%" style="stop-color:#764ba2;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#a855f7;stop-opacity:1" />
+      <stop offset="75%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge> 
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Outer ring -->
+  <circle cx="100" cy="100" r="80" fill="none" stroke="url(#targetGradient)" stroke-width="4" opacity="0.6" filter="url(#glow)"/>
+  
+  <!-- Middle ring -->
+  <circle cx="100" cy="100" r="60" fill="none" stroke="url(#targetGradient)" stroke-width="3" opacity="0.8" filter="url(#glow)"/>
+  
+  <!-- Inner ring -->
+  <circle cx="100" cy="100" r="40" fill="none" stroke="url(#targetGradient)" stroke-width="3" opacity="0.9" filter="url(#glow)"/>
+  
+  <!-- Center dot -->
+  <circle cx="100" cy="100" r="8" fill="url(#targetGradient)" filter="url(#glow)"/>
+  
+  <!-- Crosshairs -->
+  <line x1="20" y1="100" x2="40" y2="100" stroke="url(#targetGradient)" stroke-width="2" opacity="0.8" filter="url(#glow)"/>
+  <line x1="160" y1="100" x2="180" y2="100" stroke="url(#targetGradient)" stroke-width="2" opacity="0.8" filter="url(#glow)"/>
+  <line x1="100" y1="20" x2="100" y2="40" stroke="url(#targetGradient)" stroke-width="2" opacity="0.8" filter="url(#glow)"/>
+  <line x1="100" y1="160" x2="100" y2="180" stroke="url(#targetGradient)" stroke-width="2" opacity="0.8" filter="url(#glow)"/>
+</svg>

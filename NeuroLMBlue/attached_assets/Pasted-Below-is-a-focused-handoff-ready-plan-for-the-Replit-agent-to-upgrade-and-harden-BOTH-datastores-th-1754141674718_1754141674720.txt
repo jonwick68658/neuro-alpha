@@ -1,0 +1,226 @@
+Below is a focused, handoff-ready plan for the Replit agent to upgrade and harden BOTH datastores that power memory: PostgreSQL (pgvector + FTS + Vault) and Neo4j Aura (graph memory/associations). It aligns with your moat: safe-by-default migrations, least-privilege roles, streaming compatibility, and future-proof agentic memory. It also references current guidance on safe agent-driven DB changes and Neo4j agent memory patterns.
+
+PostgreSQL (primary memory store: messages, embeddings, FTS, vault)
+Environment and flags
+- DATABASE_URL: production Postgres URL (use app_rw role).
+- DEV_DATABASE_URL: development Postgres URL.
+- DB_ENV: production|development. Default development.
+- DEPLOY_CONFIRM: YES required to apply migrations in production.
+- VAULT_MASTER_KEY: strong secret; required by `SecretsVault`.
+- VAULT_KDF_ITERATIONS: default 300000; keep or increase gradually.
+
+Migration runner requirements
+- Implement a migration runner with:
+  - schema_migrations bookkeeping table.
+  - --plan prints SQL only.
+  - --apply executes SQL. In production requires DB_ENV=production AND DEPLOY_CONFIRM=YES.
+  - Refuse to run destructive statements (DROP/TRUNCATE/DELETE without WHERE) in production.
+- Use `migrator` DB role for DDL, not the app role.
+
+SQL migrations (create these files in a migrations/ folder)
+
+01_enable_extensions.sql
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS unaccent;
+
+02_messages_and_fulltext.sql
+-- Messages core (if not exists) with soft delete for safety
+CREATE TABLE IF NOT EXISTS messages (
+  id UUID PRIMARY KEY,
+  conversation_id UUID NOT NULL,
+  message_type TEXT NOT NULL CHECK (message_type IN ('user', 'assistant', 'system')),
+  content TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  is_active BOOLEAN DEFAULT TRUE
+);
+-- Generated tsvector with unaccent for English
+ALTER TABLE messages
+  ADD COLUMN IF NOT EXISTS ts tsvector
+  GENERATED ALWAYS AS (to_tsvector('english', unaccent(coalesce(content, '')))) STORED;
+CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages USING GIN (ts);
+-- Helpers
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages (conversation_id);
+CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages (created_at DESC);
+
+03_embeddings_schema.sql
+-- Adjust dimension to your embedding model (e.g., 1536 OpenAI, 3072 some others)
+CREATE TABLE IF NOT EXISTS messages_embeddings (
+  message_id UUID PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+  embedding vector(1536),
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+-- IVFFlat for cosine similarity. Tune lists after observing data cardinality.
+CREATE INDEX IF NOT EXISTS idx_messages_embeddings_ivfflat
+  ON messages_embeddings USING ivfflat (embedding vector_cosine)
+  WITH (lists = 100);
+
+04_vault_hardening.sql
+-- Enforce RLS for vault tables; application must set 'app.current_user' per request.
+ALTER TABLE IF EXISTS user_secrets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS user_secret_salts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS secret_access_log ENABLE ROW LEVEL SECURITY;
+CREATE POLICY user_secrets_isolation ON user_secrets
+  FOR SELECT USING (user_id = current_setting('app.current_user', true));
+-- Consider INSERT/UPDATE policies if needed; for now, app layer controls writes.
+
+05_roles_privileges.sql
+-- Create application roles if not present. Provide passwords via manual step or secrets manager.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_rw') THEN
+    CREATE ROLE app_rw LOGIN PASSWORD '<SET-IN-SECRET>';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'migrator') THEN
+    CREATE ROLE migrator LOGIN PASSWORD '<SET-IN-SECRET>';
+  END IF;
+END$$;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT USAGE ON SCHEMA public TO app_rw;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_rw;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_rw;
+
+06_conversation_indexes.sql
+-- Improve listing and filters in UI
+CREATE TABLE IF NOT EXISTS conversations (
+  id UUID PRIMARY KEY,
+  title TEXT,
+  topic TEXT,
+  sub_topic TEXT,
+  last_message TEXT,
+  message_count INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  is_active BOOLEAN DEFAULT TRUE
+);
+CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_topic ON conversations (topic, sub_topic);
+
+Post-migration maintenance tasks
+- After creating IVFFlat: ANALYZE messages_embeddings; and run after large ingests for good recall/latency.
+- Nightly job: VACUUM (ANALYZE) messages, messages_embeddings; REINDEX when bloat indicates.
+- Tune IVFFlat lists: start 100; scale toward sqrt(n) to n/scale heuristic once corpus grows.
+
+App-layer changes for Postgres
+- For each request with an authenticated user, set per-connection:
+  SET app.current_user = '<user-uuid>';
+- Ensure the server uses the `app_rw` role in production; only the migration runner uses `migrator`.
+- For embedding backfills:
+  - Batch insert embeddings.
+  - Optionally create IVFFlat after bulk load for speed, then ANALYZE.
+- Add idempotency for write-heavy endpoints (optional but recommended): accept Idempotency-Key header and ignore duplicates.
+
+Align with Replit agent best practices
+- Require the agent to use plan-first, then apply-after-review flows, mirroring “start with planning” guidance in Replit Agent docs [docs.replit.com](https://docs.replit.com/replitai/agent).
+- Leverage migration frameworks (e.g., Alembic) for reversible up/down as highlighted by Neon’s overview of agent-managed migrations [neon.tech](https://neon.tech/blog/looking-at-how-replit-agent-handles-databases) and [dev.to](https://dev.to/neon-postgres/looking-at-how-replit-agent-handles-databases-4259).
+
+Neo4j Aura (graph memory: semantic links, topics, feedback, retrieval)
+Goals
+- Complement PG vector store with graph memory to model relationships: user -> conversations -> messages; topics/subtopics; code/files; feedback edges; procedural/episodic memory.
+- Prepare for MCP-toolbox/agentic patterns where the agent can use Neo4j as both a tool and a knowledge store, aligning with current MCP + Neo4j integration momentum [neo4j.com](https://neo4j.com/blog/developer/ai-agents-gen-ai-toolbox/) and agent memory modeling patterns [medium.com](https://medium.com/neo4j/modeling-agent-memory-d3b6bc3bb9c4).
+
+Aura configuration
+- Environment variables:
+  - NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD
+  - Optional: NEO4J_DATABASE (default ‘neo4j’)
+- Enforce least privilege: create a dedicated user with write to the primary DB; no admin privileges in app credentials.
+- Constraints and indexing:
+  CREATE CONSTRAINT user_id IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE;
+  CREATE CONSTRAINT conversation_id IF NOT EXISTS FOR (c:Conversation) REQUIRE c.id IS UNIQUE;
+  CREATE CONSTRAINT message_id IF NOT EXISTS FOR (m:Message) REQUIRE m.id IS UNIQUE;
+  CREATE INDEX topic_name IF NOT EXISTS FOR (t:Topic) ON (t.name);
+  CREATE INDEX subtopic_name IF NOT EXISTS FOR (s:SubTopic) ON (s.name);
+  CREATE INDEX file_name IF NOT EXISTS FOR (f:File) ON (f.name);
+- Optional vector indexing in AuraDS/Aura if enabled: if you choose to store small graph-native embeddings on nodes, configure the Graph Data Science index accordingly; else keep embeddings in Postgres and store only references in Neo4j.
+
+Core graph model
+- Nodes:
+  - User {id}
+  - Conversation {id, title, updated_at}
+  - Message {id, type, created_at}
+  - Topic {name}
+  - SubTopic {name}
+  - File {name, type}
+- Relationships:
+  - (User)-[:OWNS]->(Conversation)
+  - (Conversation)-[:HAS_MESSAGE]->(Message)
+  - (Conversation)-[:HAS_TOPIC]->(Topic)
+  - (Topic)-[:HAS_SUBTOPIC]->(SubTopic)
+  - (Message)-[:REFERS_TO_FILE]->(File)
+  - (Message)-[:ASSOCIATED_WITH]->(Topic|SubTopic)
+  - (User)-[:GAVE_FEEDBACK {type, score, at}]->(Message)
+
+Cypher upserts (use MERGE for idempotency)
+- Upsert conversation + topic link:
+  MERGE (u:User {id: $user_id})
+  MERGE (c:Conversation {id: $conversation_id})
+  ON CREATE SET c.title = $title, c.updated_at = datetime()
+  ON MATCH SET  c.updated_at = datetime()
+  MERGE (u)-[:OWNS]->(c)
+  WITH c
+  OPTIONAL MATCH (c)-[r:HAS_TOPIC]->(:Topic) DELETE r
+  WITH c
+  FOREACH (topicName IN CASE WHEN $topic IS NULL OR $topic = '' THEN [] ELSE [$topic] END |
+    MERGE (t:Topic {name: topicName})
+    MERGE (c)-[:HAS_TOPIC]->(t)
+    FOREACH (sub IN CASE WHEN $sub_topic IS NULL OR $sub_topic = '' THEN [] ELSE [$sub_topic] END |
+      MERGE (s:SubTopic {name: sub})
+      MERGE (t)-[:HAS_SUBTOPIC]->(s)
+    )
+  );
+- Upsert message linkage:
+  MERGE (c:Conversation {id: $conversation_id})
+  MERGE (m:Message {id: $message_id})
+  ON CREATE SET m.type = $message_type, m.created_at = datetime()
+  MERGE (c)-[:HAS_MESSAGE]->(m);
+- Feedback:
+  MERGE (u:User {id: $user_id})
+  MERGE (m:Message {id: $message_id})
+  MERGE (u)-[f:GAVE_FEEDBACK]->(m)
+  SET f.type = $feedback_type, f.score = $score, f.at = datetime();
+
+Data synchronization policy
+- Source of truth:
+  - Postgres holds full text content, embeddings, and time-sorted message storage.
+  - Neo4j stores IDs, relationships, topics, and feedback edges for retrieval paths and personalization.
+- On write:
+  - When a conversation is created/updated in PG, upsert the corresponding graph nodes/edges in Neo4j via a background job or within the request (small workloads).
+- On delete:
+  - Use soft delete in PG (`is_active=false`) first, and mirror by removing edges in Neo4j or marking nodes with a flag `active=false`. Avoid hard deletes by default.
+
+Agent-compatibility and migration safety for Neo4j
+- Provide a Cypher migration script:
+  - Creates constraints/indexes above.
+  - No destructive operations; MERGE-only upserts.
+- Require a “plan” mode: print Cypher that will be executed for review.
+- Apply mode executes only after operator confirmation in production (similar to Postgres gates).
+
+Operational guardrails and observability
+- Backups:
+  - Verify Aura backups/retention and document restore steps.
+  - Quarterly recovery drill: restore to a fork and point a staging app to it.
+- Health checks:
+  - PG: a `db_health` endpoint runs SELECT now(); checks invalid indexes and counts NULL embeddings.
+  - Neo4j: a `graph_health` endpoint executes RETURN 1 AS ok; and runs a quick count of nodes/edges for sanity.
+- Logging and alerts:
+  - Alert on migrations executed in production.
+  - Alert if Postgres session is missing `app.current_user` while accessing RLS-protected tables.
+  - Track graph upsert failures and retry with exponential backoff.
+
+Developer notes for the Replit agent
+- Use plan-first flows and reversible migrations as recommended in Replit Agent docs [docs.replit.com](https://docs.replit.com/replitai/agent).
+- Use Alembic/SQL files (PG) and a simple Cypher runner (Neo4j) with plan/apply. Neon’s writeup shows agents generating reversible migrations, which we want to emulate for safety [neon.tech](https://neon.tech/blog/looking-at-how-replit-agent-handles-databases), [dev.to](https://dev.to/neon-postgres/looking-at-how-replit-agent-handles-databases-4259).
+- Keep the app’s embeddings in PG; Neo4j stores references and relationships. As your agent memory evolves (procedural/episodic), the Neo4j patterns described in Neo4j’s agent memory blog can be expanded to store “successful query examples” linked to feedback for retrieval-augmented planning [medium.com](https://medium.com/neo4j/modeling-agent-memory-d3b6bc3bb9c4). If you later adopt MCP-based tools, the Neo4j + MCP toolbox direction indicates clean agent-data coupling [neo4j.com](https://neo4j.com/blog/developer/ai-agents-gen-ai-toolbox/).
+
+What to implement now (bullet tasks for the agent)
+- Add migration runner with --plan/--apply gates (production requires DEPLOY_CONFIRM=YES).
+- Create and apply migrations 01–06 for Postgres; run ANALYZE messages_embeddings after IVFFlat creation.
+- Add nightly maintenance job for VACUUM (ANALYZE) and REINDEX thresholds.
+- Ensure server code sets SET app.current_user per request and uses app_rw in prod.
+- Wire conversation/message writes to also upsert into Neo4j using the Cypher MERGE patterns above.
+- Add Postgres and Neo4j health endpoints and basic alerts on risky operations.
+- Confirm environment variables exist for both databases and that credentials are least-privilege.
+
+If you want, I can supply:
+- A Python migration runner template with --plan/--apply for Postgres and Neo4j.
+- A small Python module that performs the Neo4j upserts you can call from your existing message/conversation service.

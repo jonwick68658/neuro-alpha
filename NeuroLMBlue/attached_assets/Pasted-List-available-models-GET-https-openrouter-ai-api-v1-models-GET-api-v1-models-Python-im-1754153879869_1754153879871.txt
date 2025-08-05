@@ -1,0 +1,146 @@
+List available models
+GET
+https://openrouter.ai/api/v1/models
+GET
+/api/v1/models
+
+Python
+
+import requests
+url = "https://openrouter.ai/api/v1/models"
+response = requests.get(url)
+print(response.json())
+Try it
+200
+Retrieved
+
+{
+  "data": [
+    {
+      "id": "string",
+      "name": "string",
+      "created": 1741818122,
+      "description": "string",
+      "architecture": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tokenizer": "GPT",
+        "instruct_type": "string"
+      },
+      "top_provider": {
+        "is_moderated": true,
+        "context_length": 128000,
+        "max_completion_tokens": 16384
+      },
+      "pricing": {
+        "prompt": "0.0000007",
+        "completion": "0.0000007",
+        "image": "0",
+        "request": "0",
+        "web_search": "0",
+        "internal_reasoning": "0",
+        "input_cache_read": "0",
+        "input_cache_write": "0"
+      },
+      "canonical_slug": "string",
+      "context_length": 128000,
+      "hugging_face_id": "string",
+      "per_request_limits": {},
+      "supported_parameters": [
+        "string"
+      ]
+    }
+  ]
+}
+Returns a list of models available through the API. Note: supported_parameters is a union of all parameters supported by all providers for this model. There may not be a single provider which offers all of the listed parameters for a model. More documentation available here.
+
+Query parameters
+category
+string
+Optional
+Filter models by category (e.g. programming). Sorted from most to least used.
+
+use_rss
+boolean
+Optional
+Defaults to false
+Return RSS XML feed instead of JSON (BETA)
+
+use_rss_chat_links
+boolean
+Optional
+Defaults to false
+Use chat URLs instead of model page URLs for RSS items (only applies when use_rss=true) (BETA)
+
+Response
+List of available models
+data
+list of objects
+
+Hide 12 properties
+id
+string
+name
+string
+created
+double
+description
+string
+architecture
+object
+
+Hide 4 properties
+input_modalities
+list of strings
+output_modalities
+list of strings
+tokenizer
+string
+instruct_type
+string or null
+top_provider
+object
+
+Hide 3 properties
+is_moderated
+boolean
+context_length
+double or null
+max_completion_tokens
+double or null
+pricing
+object
+
+Hide 8 properties
+prompt
+string
+completion
+string
+image
+string
+request
+string
+web_search
+string
+internal_reasoning
+string
+input_cache_read
+string or null
+input_cache_write
+string or null
+canonical_slug
+string or null
+Canonical slug identifier for the model
+context_length
+double or null
+hugging_face_id
+string or null
+per_request_limits
+object or null
+supported_parameters
+list of strings or null

@@ -1,0 +1,132 @@
+List endpoints for a model
+GET
+https://openrouter.ai/api/v1/models/:author/:slug/endpoints
+GET
+/api/v1/models/:author/:slug/endpoints
+
+Python
+
+import requests
+url = "https://openrouter.ai/api/v1/models/author/slug/endpoints"
+response = requests.get(url)
+print(response.json())
+Try it
+200
+Retrieved
+
+{
+  "data": {
+    "id": "string",
+    "name": "string",
+    "created": 1.1,
+    "description": "string",
+    "architecture": {
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tokenizer": "string",
+      "instruct_type": "string"
+    },
+    "endpoints": [
+      {
+        "name": "string",
+        "context_length": 1.1,
+        "pricing": {
+          "request": "string",
+          "image": "string",
+          "prompt": "string",
+          "completion": "string"
+        },
+        "provider_name": "string",
+        "supported_parameters": [
+          "string"
+        ],
+        "quantization": "string",
+        "max_completion_tokens": 1.1,
+        "max_prompt_tokens": 1.1,
+        "status": "string",
+        "uptime_last_30m": 1.1
+      }
+    ]
+  }
+}
+Path parameters
+author
+string
+Required
+slug
+string
+Required
+Response
+List of endpoints for the model
+data
+object
+
+Hide 6 properties
+id
+string
+name
+string
+created
+double
+description
+string
+architecture
+object
+
+Hide 4 properties
+input_modalities
+list of strings
+output_modalities
+list of strings
+tokenizer
+string or null
+instruct_type
+string or null
+endpoints
+list of objects
+
+Hide 10 properties
+name
+string
+context_length
+double
+pricing
+object
+
+Hide 4 properties
+request
+string
+image
+string
+prompt
+string
+completion
+string
+provider_name
+string
+supported_parameters
+list of strings
+quantization
+string or null
+max_completion_tokens
+double or null
+max_prompt_tokens
+double or null
+status
+string or null
+uptime_last_30m
+double or null
+Rolling 30-minute uptime for this provider as a percentage of traffic it served. Null if fewer than 100 requests were made.
+
+Was this page helpful?
+Yes
+No
+Previous
+List models filtered by user provider preferences
+Next
+Built with

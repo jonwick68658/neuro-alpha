@@ -1,0 +1,359 @@
+<!-- File: login.html -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>NeuroLM • Sign in</title>
+  <meta name="color-scheme" content="dark light">
+  <meta name="description" content="Secure sign in to NeuroLM">
+  <style>
+    :root{
+      --primary:#4f46e5; --primary-2:#4338ca; --accent:#ff7d4d;
+      --bg:#000000; --bg-2:#111111; --bg-3:#1a1a1a; --card:#222222;
+      --text:#f7f7f7; --muted:#9ca3af; --border:#333333;
+      --success:#16a34a; --danger:#dc2626; --warning:#d97706;
+      --shadow:0 20px 50px rgba(0,0,0,0.55); --radius:20px;
+      --focus:0 0 0 2px rgba(79,70,229,.65)
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,system-ui,sans-serif;background:var(--bg);color:var(--text)}
+    a{color:#93c5fd;text-decoration:none} a:hover{text-decoration:underline}
+
+    /* Background and shell (keeps your aesthetic) */
+    .background-pattern{
+      position:fixed; inset:0;
+      background-image:url('/static/neural-brain-logo.png');
+      background-repeat:no-repeat; background-position:center; background-size:40%;
+      opacity:.05; filter:blur(1px); z-index:0;
+    }
+    .wrap{
+      min-height:100vh; display:grid; place-items:center; padding:20px; position:relative; z-index:1;
+      background:
+        radial-gradient(1100px 600px at 12% -10%, rgba(99,102,241,.16), transparent),
+        radial-gradient(800px 500px at 88% 110%, rgba(255,125,77,.10), transparent);
+    }
+
+    /* Glass/gradient card */
+    .card{
+      width:min(460px, 94vw);
+      background: rgba(0,0,0,0.92);
+      border-radius:var(--radius);
+      border:2px solid transparent;
+      padding:26px 22px 22px;
+      position:relative;
+      box-shadow:
+        0 25px 60px rgba(0,0,0,0.6),
+        inset 0 1px 0 rgba(255,255,255,0.08),
+        0 0 0 1px rgba(102,126,234,0.28);
+      backdrop-filter: blur(20px);
+    }
+    .card::before{
+      content:'';
+      position:absolute; inset:-2px;
+      border-radius:calc(var(--radius) + 2px);
+      padding:2px;
+      background:linear-gradient(135deg,
+        rgba(102,126,234,.6) 0%,
+        rgba(118,75,162,.6) 25%,
+        rgba(168,85,247,.55) 50%,
+        rgba(102,126,234,.6) 100%);
+      -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+      -webkit-mask-composite:xor; mask-composite:exclude;
+      animation: sheen 3.2s linear infinite;
+      pointer-events:none;
+    }
+    @keyframes sheen{ 0%{opacity:.6} 50%{opacity:.9} 100%{opacity:.6} }
+
+    .brand{display:grid; place-items:center; gap:10px; margin:4px 0 18px}
+    .brand img{max-width:240px; width:78%; height:auto; opacity:.95; filter:drop-shadow(0 0 10px rgba(102,126,234,.25))}
+    .subtitle{margin:0; color:var(--muted); text-align:center; font-size:1rem}
+
+    /* Tabs (Login / Register) */
+    .tabs{display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:18px 0 8px}
+    .tab{
+      padding:10px 12px; border-radius:12px; border:1px solid var(--border);
+      background:#131722; color:var(--text); font-weight:700; cursor:pointer;
+    }
+    .tab[aria-selected="true"]{border-color:var(--primary); background:rgba(99,102,241,.14)}
+
+    /* Form */
+    .panel{display:none} .panel[aria-hidden="false"]{display:block}
+    .field{display:grid; gap:6px; margin:10px 0}
+    label{color:#e5e7eb; font-size:.92rem; font-weight:500}
+    .input{
+      width:100%; padding:14px; border-radius:12px; border:1px solid #404040;
+      background:rgba(42,42,42,0.88); color:#fff; font-size:1rem;
+      transition:border-color .2s, box-shadow .2s, background .2s;
+    }
+    .input::placeholder{color:#6b7280}
+    .input:focus{outline:none; border-color:#667eea; box-shadow:var(--focus); background:rgba(42,42,42,1)}
+    .row{display:flex; align-items:center; justify-content:space-between; gap:8px; margin:8px 0 6px}
+    .link{background:none;border:0;color:#93c5fd;cursor:pointer;font-size:.9rem}
+    .remember{display:flex;align-items:center;gap:8px;color:#9ca3af;font-size:.9rem}
+    .remember input{accent-color:#667eea}
+
+    .btn{
+      width:100%; padding:14px 16px; border-radius:50px; border:0; cursor:pointer; color:#fff; font-weight:700;
+      background: linear-gradient(135deg, rgba(20,30,60,.40) 0%, rgba(40,50,100,.30) 50%, rgba(20,30,60,.40) 100%);
+      box-shadow:
+        0 0 0 1px rgba(0,255,255,.30),
+        0 0 0 2px rgba(138,43,226,.20),
+        0 0 0 3px rgba(0,255,127,.12),
+        0 6px 26px rgba(0,255,255,.22),
+        inset 0 1px 0 rgba(255,255,255,.20),
+        inset 0 -1px 0 rgba(255,255,255,.08);
+      transition: transform .15s ease, box-shadow .15s ease;
+      position:relative; overflow:hidden;
+    }
+    .btn:hover{transform:translateY(-1px) scale(1.01)}
+    .btn:active{transform:none}
+    .btn--accent{background:linear-gradient(135deg, rgba(14,165,233,.24), rgba(79,70,229,.22))}
+    .sep{height:1px;background:#2a2f3a;margin:12px 0}
+
+    .error, .ok{
+      border-radius:12px; padding:10px 12px; display:none; margin:8px 0 0;
+      border:1px solid; font-size:.95rem;
+    }
+    .error{color:#fecaca; background:rgba(220,38,38,.12); border-color:#7f1d1d}
+    .ok{color:#86efac; background:rgba(22,163,74,.12); border-color:#14532d}
+
+    .footer{margin-top:12px; color:var(--muted); font-size:.85rem; text-align:center}
+
+    /* Responsive */
+    @media (max-width:480px){
+      .card{padding:22px 16px}
+    }
+  </style>
+</head>
+<body>
+  <div class="background-pattern" aria-hidden="true"></div>
+  <main class="wrap">
+    <section class="card" role="dialog" aria-modal="true" aria-labelledby="title">
+      <div class="brand">
+        <img src="/static/neurolm-glass-logo.png" alt="NeuroLM">
+        <p class="subtitle">Sign in to your account</p>
+      </div>
+
+      <!-- Tabs -->
+      <div class="tabs" role="tablist" aria-label="Authentication">
+        <button id="tabLogin" class="tab" role="tab" aria-selected="true" aria-controls="panelLogin">Login</button>
+        <button id="tabRegister" class="tab" role="tab" aria-selected="false" aria-controls="panelRegister">Register</button>
+      </div>
+
+      <!-- Alerts -->
+      <div id="alertError" class="error" role="alert"></div>
+      <div id="alertOk" class="ok" role="status"></div>
+
+      <!-- Login panel -->
+      <section id="panelLogin" class="panel" role="tabpanel" aria-labelledby="tabLogin" aria-hidden="false">
+        <form id="formLogin" method="post" action="/api/auth/login" novalidate>
+          <input type="hidden" name="csrf_token" id="loginCsrf" value="">
+          <div class="field">
+            <label for="loginEmail">Email</label>
+            <input id="loginEmail" class="input" type="email" name="email" placeholder="name@example.com"
+                   autocomplete="username" required>
+          </div>
+          <div class="field">
+            <label for="loginPassword">Password</label>
+            <input id="loginPassword" class="input" type="password" name="password" placeholder="Enter your password"
+                   autocomplete="current-password" required minlength="12">
+          </div>
+          <div class="row">
+            <label class="remember">
+              <input type="checkbox" id="rememberMe" name="remember"> Keep me signed in for 30 days
+            </label>
+            <button id="btnForgot" class="link" type="button" aria-label="Forgot password">Forgot?</button>
+          </div>
+          <button class="btn" type="submit">Sign In</button>
+        </form>
+        <div class="sep"></div>
+        <div style="display:flex; gap:8px">
+          <button id="btnPasskeyLogin" class="btn btn--accent" type="button">Use Passkey</button>
+          <button id="btnPasskeyRegister" class="btn btn--accent" type="button">Register Passkey</button>
+        </div>
+      </section>
+
+      <!-- Register panel -->
+      <section id="panelRegister" class="panel" role="tabpanel" aria-labelledby="tabRegister" aria-hidden="true">
+        <form id="formRegister" method="post" action="/api/auth/register" novalidate>
+          <input type="hidden" name="csrf_token" id="regCsrf" value="">
+          <div class="field">
+            <label for="regFirst">First name</label>
+            <input id="regFirst" class="input" type="text" name="first_name" autocomplete="given-name" required>
+          </div>
+          <div class="field">
+            <label for="regEmail">Email</label>
+            <input id="regEmail" class="input" type="email" name="email" autocomplete="email" required>
+          </div>
+          <div class="field">
+            <label for="regPassword">Password</label>
+            <input id="regPassword" class="input" type="password" name="password" autocomplete="new-password"
+                   minlength="12" required placeholder="Use 12+ chars, mix letters, numbers, symbols">
+          </div>
+          <button class="btn" type="submit">Create Account</button>
+        </form>
+      </section>
+
+      <p class="footer">Protected by encrypted vault, secure cookies, and per‑user RLS.</p>
+    </section>
+  </main>
+
+  <script>
+    // Tabs
+    const tabLogin = document.getElementById('tabLogin');
+    const tabRegister = document.getElementById('tabRegister');
+    const panelLogin = document.getElementById('panelLogin');
+    const panelRegister = document.getElementById('panelRegister');
+    const aErr = document.getElementById('alertError');
+    const aOk = document.getElementById('alertOk');
+
+    function showPanel(which){
+      const loginOn = which === 'login';
+      tabLogin.setAttribute('aria-selected', String(loginOn));
+      tabRegister.setAttribute('aria-selected', String(!loginOn));
+      panelLogin.setAttribute('aria-hidden', String(!loginOn));
+      panelRegister.setAttribute('aria-hidden', String(loginOn));
+      (loginOn ? document.getElementById('loginEmail') : document.getElementById('regFirst')).focus();
+      clearAlerts();
+    }
+    tabLogin.addEventListener('click', ()=>showPanel('login'));
+    tabRegister.addEventListener('click', ()=>showPanel('register'));
+
+    function clearAlerts(){ aErr.style.display='none'; aErr.textContent=''; aOk.style.display='none'; aOk.textContent=''; }
+    function showError(msg){ aErr.textContent = msg; aErr.style.display='block'; }
+    function showOk(msg){ aOk.textContent = msg; aOk.style.display='block'; }
+
+    // CSRF fetch (defense-in-depth, align with backend)
+    let csrfToken = null;
+    async function loadCSRF(){
+      try{
+        const res = await fetch('/api/auth/csrf', { credentials:'include' });
+        if (res.ok){
+          csrfToken = await res.text();
+          const loginCsrf = document.getElementById('loginCsrf');
+          const regCsrf = document.getElementById('regCsrf');
+          if (loginCsrf) loginCsrf.value = csrfToken;
+          if (regCsrf) regCsrf.value = csrfToken;
+        }
+      }catch{/* silent */}
+    }
+
+    // POST helper (JSON) with credentials & CSRF header
+    async function postJSON(url, body){
+      const headers = { 'Content-Type':'application/json' };
+      if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+      const res = await fetch(url, {
+        method:'POST',
+        credentials:'include',
+        headers,
+        body: JSON.stringify(body)
+      });
+      return res;
+    }
+
+    // Login submit (AJAX submit to respect JSON API and cookie session)
+    document.getElementById('formLogin').addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      clearAlerts();
+      const email = (document.getElementById('loginEmail').value||'').trim();
+      const password = document.getElementById('loginPassword').value||'';
+      const remember = document.getElementById('rememberMe').checked;
+
+      if (!email || !password){ showError('Please enter email and password.'); return; }
+      if (password.length < 12){ showError('Password must be at least 12 characters.'); return; }
+
+      try{
+        const res = await postJSON('/api/auth/login', { email, password, remember });
+        if (!res.ok){
+          // Always generic to avoid enumeration
+          const err = await res.json().catch(()=>({ detail:'Invalid credentials' }));
+          showError(err.detail || 'Invalid credentials');
+          return;
+        }
+        showOk('Signed in. Redirecting…');
+        setTimeout(()=>location.href='/', 500);
+      }catch{
+        showError('Network error. Please try again.');
+      }
+    });
+
+    // Register submit
+    document.getElementById('formRegister').addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      clearAlerts();
+      const first_name = (document.getElementById('regFirst').value||'').trim();
+      const email = (document.getElementById('regEmail').value||'').trim();
+      const password = document.getElementById('regPassword').value||'';
+      if (!first_name || !email || !password){ showError('Please complete all fields.'); return; }
+      if (password.length < 12){ showError('Password must be at least 12 characters.'); return; }
+
+      try{
+        const res = await postJSON('/api/auth/register', { first_name, email, password });
+        if (!res.ok){
+          const err = await res.json().catch(()=>({ detail:'Registration failed' }));
+          showError(err.detail || 'Registration failed');
+          return;
+        }
+        showOk('Account created. You can sign in now.');
+        showPanel('login');
+      }catch{
+        showError('Network error. Please try again.');
+      }
+    });
+
+    // Forgot password
+    document.getElementById('btnForgot').addEventListener('click', async ()=>{
+      clearAlerts();
+      const email = prompt('Enter your account email:');
+      if (!email) return;
+      try{
+        const res = await postJSON('/api/auth/forgot', { email: email.trim() });
+        if (res.ok) showOk('If that email exists, a reset link was sent.');
+        else showError('Request failed. Try again later.');
+      }catch{ showError('Network error.'); }
+    });
+
+    // Passkey (WebAuthn) stubs — wire to your WebAuthn endpoints
+    async function passkeyRegister(){
+      try{
+        // 1) Get creation options
+        const init = await fetch('/api/auth/passkey/register', { method:'POST', credentials:'include' });
+        if (!init.ok) return showError('Passkey init failed');
+        const options = await init.json();
+
+        // 2) Call WebAuthn create (convert base64url -> ArrayBuffers as needed)
+        // NOTE: Actual conversion omitted here; implement per your backend.
+        // const pubKey = convertToPublicKeyOptions(options);
+        // const cred = await navigator.credentials.create({ publicKey: pubKey });
+
+        // 3) POST credential to verify endpoint
+        // await fetch('/api/auth/passkey/register/verify', { ... });
+
+        showOk('Passkey registration started. Complete in your authenticator.');
+      }catch{ showError('Passkey error.'); }
+    }
+    async function passkeyLogin(){
+      try{
+        const init = await fetch('/api/auth/passkey/login', { method:'POST', credentials:'include' });
+        if (!init.ok) return showError('Passkey init failed');
+        const options = await init.json();
+
+        // const pubKey = convertToRequestOptions(options);
+        // const assertion = await navigator.credentials.get({ publicKey: pubKey });
+        // await fetch('/api/auth/passkey/login/verify', { ... });
+
+        showOk('Passkey login started. Complete in your authenticator.');
+      }catch{ showError('Passkey error.'); }
+    }
+    document.getElementById('btnPasskeyRegister').addEventListener('click', passkeyRegister);
+    document.getElementById('btnPasskeyLogin').addEventListener('click', passkeyLogin);
+
+    // Init
+    (async function init(){
+      await loadCSRF();
+      document.getElementById('loginEmail').focus();
+    })();
+  </script>
+</body>
+</html>

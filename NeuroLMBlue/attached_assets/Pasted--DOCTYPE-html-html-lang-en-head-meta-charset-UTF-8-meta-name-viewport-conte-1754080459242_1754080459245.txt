@@ -1,0 +1,1343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>NeuroLM Chat</title>
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="color-scheme" content="dark light" />
+  <!-- Secure Markdown and sanitization -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js" defer></script>
+  <style>
+    :root {
+      --primary: #4f46e5;
+      --primary-2: #4338ca;
+      --accent: #ff7d4d;
+      --bg: #000000;
+      --bg-2: #111111;
+      --bg-3: #1a1a1a;
+      --card: #222222;
+      --text: #f7f7f7;
+      --muted: #9ca3af;
+      --border: #333333;
+      --success: #16a34a;
+      --danger: #dc2626;
+      --warning: #d97706;
+      --shadow: 0 10px 30px rgba(0,0,0,0.5);
+      --radius: 12px;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+    a { color: #93c5fd; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--border);
+      background: var(--bg); position: sticky; top: 0; z-index: 100; min-height: 56px;
+    }
+    .header-left { display: flex; align-items: center; gap: 10px; }
+    .hamburger-btn {
+      width: 38px; height: 38px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--bg-2); color: var(--text); font-size: 18px; cursor: pointer;
+    }
+    .hamburger-btn:focus { outline: 2px solid var(--primary); outline-offset: 2px; }
+    .header-title h1 { font-size: 1rem; margin: 0; font-weight: 600; cursor: pointer; }
+    .header-title p { margin: 2px 0 0 0; font-size: 0.75rem; color: var(--muted); }
+
+    .header-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .select-wrap { position: relative; display: inline-flex; flex-direction: column; gap: 4px; }
+    .select-wrap label { font-size: 0.7rem; color: var(--muted); }
+    .combobox {
+      min-width: 170px; border: 1px solid var(--border); border-radius: 8px;
+      background: rgba(255,255,255,0.08); color: var(--text); padding: 6px 8px;
+      cursor: text;
+    }
+    .combobox[aria-expanded="true"] { outline: 2px solid var(--primary); outline-offset: 2px; }
+    .dropdown {
+      position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: var(--bg-3);
+      border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow);
+      max-height: 240px; overflow: auto; display: none; z-index: 200;
+    }
+    .dropdown[aria-hidden="false"] { display: block; }
+    .dropdown-option {
+      padding: 8px 10px; cursor: pointer; font-size: 0.9rem;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .dropdown-option:last-child { border-bottom: 0; }
+    .dropdown-option[aria-selected="true"], .dropdown-option:hover { background: rgba(99,102,241,0.2); }
+
+    .uf-score {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: linear-gradient(45deg, #3b82f6, #1d4ed8);
+      color: #fff; padding: 6px 10px; border-radius: 14px; font-size: 0.75rem;
+      position: relative; cursor: default;
+    }
+    .uf-score .tooltip {
+      position: absolute; right: 0; top: calc(100% + 8px);
+      width: 300px; padding: 10px; border-radius: 10px; background: #111827; color: #fff;
+      border: 1px solid #374151; box-shadow: var(--shadow); display: none; font-size: 0.85rem;
+    }
+    .uf-score:focus-within .tooltip, .uf-score:hover .tooltip { display: block; }
+    .uf-score .tooltip h4 { margin: 0 0 6px 0; color: #93c5fd; font-size: 0.95rem; }
+
+    .profile { position: relative; }
+    .profile-btn {
+      width: 38px; height: 38px; border-radius: 50%;
+      border: 1px solid var(--border); background: var(--bg-2); color: var(--text);
+      cursor: pointer; font-weight: 700;
+    }
+    .profile-menu {
+      position: absolute; right: 0; top: calc(100% + 8px);
+      min-width: 220px; padding: 8px 0; background: rgba(17,24,39,0.98);
+      border: 1px solid #374151; border-radius: 12px; box-shadow: var(--shadow);
+      display: none; z-index: 300;
+    }
+    .profile-menu[aria-hidden="false"] { display: block; }
+    .profile-item {
+      width: 100%; background: none; border: 0; color: var(--text);
+      text-align: left; padding: 8px 12px; cursor: pointer; display: flex; gap: 8px; align-items: center;
+    }
+    .profile-item:hover { background: rgba(75,85,99,0.35); }
+
+    .main { display: grid; grid-template-columns: 320px 1fr; gap: 0; height: calc(100vh - 56px); }
+    .sidebar { border-right: 1px solid var(--border); background: var(--bg); overflow: hidden; position: relative; }
+    .sidebar-inner { position: absolute; inset: 0; display: flex; flex-direction: column; }
+    .sidebar-header { padding: 12px; border-bottom: 1px solid var(--border); background: var(--bg); }
+    .topic-area label { display: block; font-size: 0.85rem; color: var(--muted); margin: 6px 0; }
+    .select { width: 100%; padding: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 8px; margin-bottom: 8px; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 10px 12px; background: var(--primary); color: #fff; border: 0; border-radius: 8px; cursor: pointer; width: 100%;
+    }
+    .btn:hover { background: var(--primary-2); }
+
+    .conversations { flex: 1; overflow: auto; padding: 10px; }
+    .conv {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px;
+      border: 1px solid transparent; border-radius: 10px; background: var(--bg-3); margin-bottom: 8px; cursor: pointer;
+    }
+    .conv:hover { background: var(--card); }
+    .conv.active { border-color: var(--primary); background: rgba(99,102,241,0.2); }
+    .conv-title { font-size: 0.95rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .conv-meta { font-size: 0.75rem; color: var(--muted); }
+
+    .chat { display: grid; grid-template-rows: auto 1fr auto; height: 100%; background: var(--bg); }
+    .chat-top {
+      padding: 10px; border-bottom: 1px solid var(--border); background: var(--bg-2);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .topic-display { font-size: 0.9rem; }
+    .edit-topic { padding: 6px 10px; border: 0; background: var(--primary); color: #fff; border-radius: 8px; cursor: pointer; }
+    .edit-topic:hover { background: var(--primary-2); }
+    .chat-messages { overflow: auto; padding: 16px; background: var(--bg); position: relative; }
+    .welcome { height: 100%; display: grid; place-content: center; text-align: center; gap: 10px; color: var(--muted); }
+    .message { margin: 10px 0; padding: 12px; border-radius: 12px; max-width: 90%; line-height: 1.5; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }
+    .message.user { background: var(--primary); color: #fff; margin-left: auto; text-align: left; }
+    .message.assistant { background: var(--card); color: var(--text); }
+    .message.system { background: #0b3b0b; color: #d1fae5; }
+    .msg-actions { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+    .pill {
+      padding: 4px 8px; border-radius: 12px; font-size: 0.75rem; border: 1px solid var(--border);
+      background: rgba(255,255,255,0.04); color: var(--muted); cursor: pointer;
+    }
+    .pill.active { border-color: var(--primary); color: #93c5fd; background: rgba(99,102,241,0.15); }
+    .pill.success { border-color: var(--success); color: #86efac; background: rgba(22,163,74,0.15); }
+    .pill.warn { border-color: var(--warning); color: #facc15; background: rgba(217,119,6,0.15); }
+    .pill.danger { border-color: var(--danger); color: #fecaca; background: rgba(220,38,38,0.15); }
+
+    pre {
+      background: #0f0f0f; border: 1px solid #2b2b2b; border-radius: 8px; padding: 1.75rem 1rem 1rem;
+      overflow: auto; position: relative; color: #e5e7eb;
+    }
+    pre .code-copy, pre .code-lang {
+      position: absolute; top: 8px; padding: 2px 6px; font-size: 0.72rem; border-radius: 4px;
+      background: rgba(0,0,0,0.6); color: #fff; border: 1px solid rgba(255,255,255,0.2);
+    }
+    pre .code-copy { right: 8px; cursor: pointer; }
+    pre .code-lang { left: 8px; }
+
+    .typing {
+      display: inline-flex; align-items: center; gap: 6px; background: var(--card);
+      border-left: 3px solid var(--primary); padding: 10px; border-radius: 10px; margin: 8px 0;
+    }
+    .dots { display: inline-flex; gap: 2px; }
+    .dot { width: 6px; height: 6px; background: var(--primary); border-radius: 50%; animation: blink 1.2s infinite ease-in-out; }
+    .dot:nth-child(2) { animation-delay: 0.2s; }
+    .dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes blink { 0%,60%,100% {opacity: .4; transform: translateY(0);} 30% {opacity: 1; transform: translateY(-2px);} }
+
+    .input-wrap {
+      padding: 10px; position: sticky; bottom: 0; z-index: 90;
+      background: linear-gradient(180deg, rgba(0,0,0,0), rgba(0,0,0,.65) 30%, rgba(0,0,0,.95));
+      display: grid; place-items: center;
+    }
+    .input-bar {
+      width: min(900px, 96vw); border: 1px solid var(--border); border-radius: 14px; background: var(--bg-3);
+      padding: 8px; display: grid; gap: 8px;
+    }
+    .input-row { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 8px; }
+    .textarea {
+      background: transparent; color: var(--text); border: 0; outline: 0; resize: none;
+      min-height: 22px; max-height: 140px; overflow: auto; font-size: 16px; line-height: 20px; padding: 2px 6px;
+    }
+    .controls { display: inline-flex; align-items: center; gap: 6px; }
+    .tool-btn, .send-btn { padding: 6px 10px; border-radius: 10px; border: 0; cursor: pointer; }
+    .tool-btn { background: rgba(255,255,255,0.06); color: var(--muted); }
+    .tool-btn[aria-expanded="true"] { outline: 2px solid var(--primary); }
+    .send-btn { background: var(--primary); color: #fff; }
+    .send-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    .tools-menu {
+      position: absolute; bottom: calc(100% + 6px); background: var(--bg-3); border: 1px solid var(--border);
+      border-radius: 10px; box-shadow: var(--shadow); padding: 6px; min-width: 180px; display: none; z-index: 250;
+    }
+    .tools-menu[aria-hidden="false"] { display: block; }
+    .tool-item { width: 100%; text-align: left; padding: 8px 10px; background: transparent; color: var(--text); border-radius: 8px; border: 0; cursor: pointer; }
+    .tool-item:hover { background: rgba(255,255,255,0.08); }
+
+    .slash {
+      position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; background: var(--bg-3);
+      border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow);
+      max-height: 220px; overflow: auto; display: none; z-index: 260;
+    }
+    .slash[aria-hidden="false"] { display: block; }
+    .slash-item { padding: 8px 10px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.06); }
+    .slash-item:last-child { border-bottom: 0; }
+    .slash-item[aria-selected="true"], .slash-item:hover { background: rgba(99,102,241,0.2); }
+
+    .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; place-items: center; z-index: 400; }
+    .overlay[aria-hidden="false"] { display: grid; }
+    .dialog {
+      background: rgba(17,24,39,0.98); border: 1px solid #374151; border-radius: 14px; box-shadow: var(--shadow);
+      width: min(560px, 96vw); max-height: 86vh; overflow: hidden; display: grid; grid-template-rows: auto 1fr;
+    }
+    .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #374151; }
+    .dialog-title { margin: 0; font-weight: 600; }
+    .dialog-close { border: 0; background: transparent; color: var(--muted); font-size: 20px; cursor: pointer; }
+    .dialog-body { padding: 14px; overflow: auto; }
+
+    .toasts { position: fixed; bottom: 10px; right: 10px; display: grid; gap: 8px; z-index: 500; }
+    .toast {
+      background: rgba(17,24,39,0.98); color: var(--text); border: 1px solid #374151;
+      padding: 10px 12px; border-radius: 10px; min-width: 220px; box-shadow: var(--shadow);
+    }
+    .toast.success { border-color: var(--success); }
+    .toast.error { border-color: var(--danger); }
+
+    @media (max-width: 900px) {
+      .main { grid-template-columns: 1fr; }
+      .sidebar {
+        position: fixed; left: 0; top: 56px; width: 92vw; max-width: 360px; height: calc(100vh - 56px);
+        transform: translateX(-101%); transition: transform .25s ease; z-index: 350;
+        box-shadow: 2px 0 20px rgba(0,0,0,.4); border-right: 1px solid var(--border); border-top: 1px solid var(--border);
+      }
+      .sidebar.open { transform: translateX(0); }
+      .overlay-menu { position: fixed; inset: 56px 0 0 0; background: rgba(0,0,0,.4); display: none; z-index: 300; }
+      .overlay-menu.show { display: block; }
+      .header-controls { gap: 8px; }
+      .combobox { min-width: 140px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="header" role="banner">
+    <div class="header-left">
+      <button id="btnSidebar" class="hamburger-btn" aria-label="Toggle conversations panel" aria-expanded="false" aria-controls="sidebar">☰</button>
+      <div class="header-title">
+        <h1 id="appTitle" tabindex="0">NeuroLM Chat</h1>
+        <p>AI chat with integrated memory</p>
+      </div>
+    </div>
+    <div class="header-controls">
+      <div class="select-wrap" style="position:relative">
+        <label for="modelInput">Model</label>
+        <input id="modelInput" class="combobox" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="modelList" autocomplete="off" placeholder="Choose AI" />
+        <div id="modelList" class="dropdown" role="listbox" aria-hidden="true"></div>
+      </div>
+      <div class="select-wrap" style="position:relative">
+        <label for="fileInputBox">Files</label>
+        <input id="fileInputBox" class="combobox" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="fileList" autocomplete="off" placeholder="Search files" />
+        <div id="fileList" class="dropdown" role="listbox" aria-hidden="true"></div>
+      </div>
+
+      <!-- Streaming toggle -->
+      <div class="select-wrap" style="position:relative">
+        <label for="streamToggle">Streaming</label>
+        <button id="streamToggle" class="tool-btn" aria-pressed="false" title="Toggle streaming responses">Off</button>
+      </div>
+
+      <div class="uf-score" tabindex="0" aria-describedby="ufTip">
+        <span>UF:</span><strong id="ufScore">0</strong>
+        <div id="ufTip" class="tooltip" role="tooltip" aria-live="polite">
+          <h4>User Feedback Score</h4>
+          Earn points by rating AI responses to improve the system. Upcoming rewards: higher rate limits, new features, premium capabilities, and crypto incentives.
+        </div>
+      </div>
+      <div class="profile">
+        <button id="btnProfile" class="profile-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="profileMenu">U</button>
+        <div id="profileMenu" class="profile-menu" role="menu" aria-hidden="true">
+          <button class="profile-item" role="menuitem" id="menuAPIKeys">🔑 API Keys</button>
+          <button class="profile-item" role="menuitem" id="menuPersonalModels">🤖 Personal AI Models</button>
+          <button class="profile-item" role="menuitem" id="menuTraining">🎓 Training</button>
+          <button class="profile-item" role="menuitem" id="menuCredits">💰 Credits</button>
+          <button class="profile-item" role="menuitem" id="menuSettings">⚙️ Settings</button>
+          <div style="height:1px;background:#374151;margin:6px 0"></div>
+          <button class="profile-item" role="menuitem" id="menuSignOut">🚪 Sign Out</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div id="overlayMenu" class="overlay-menu" aria-hidden="true"></div>
+
+  <main class="main">
+    <aside id="sidebar" class="sidebar" aria-label="Conversations panel">
+      <div class="sidebar-inner">
+        <div class="sidebar-header">
+          <div class="topic-area">
+            <label for="topicSelect">Topic</label>
+            <select id="topicSelect" class="select">
+              <option value="">All topics</option>
+              <option value="__new__">+ Create new topic</option>
+            </select>
+            <label for="subtopicSelect">Sub-topic</label>
+            <select id="subtopicSelect" class="select" disabled>
+              <option value="">All sub-topics</option>
+              <option value="__new__">+ Create new sub-topic</option>
+            </select>
+          </div>
+          <button id="btnNewChat" class="btn">+ Start New Chat</button>
+        </div>
+        <div id="conversations" class="conversations" role="list"></div>
+      </div>
+    </aside>
+
+    <section class="chat" aria-label="Chat">
+      <div class="chat-top">
+        <div class="topic-display" id="topicDisplay">No topic assigned</div>
+        <button id="btnEditTopic" class="edit-topic">Edit</button>
+      </div>
+      <div id="chatMessages" class="chat-messages" aria-live="polite" aria-busy="false">
+        <div class="welcome">
+          <div>
+            <img src="/static/neurolm-welcome-image.png" alt="" style="max-width: 520px; width: 90%; height: auto; opacity:.9;" />
+          </div>
+          <div>
+            <h2 style="margin:10px 0 4px 0;">Welcome Back</h2>
+            <p id="welcomeUser" style="margin:0; font-size:1rem;">User</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="input-wrap">
+        <div class="input-bar" role="group" aria-label="Message input">
+          <div class="input-row" style="position:relative">
+            <textarea id="txtMessage" class="textarea" placeholder="Ask anything" rows="1"></textarea>
+            <div class="controls">
+              <div style="position:relative">
+                <button id="btnTools" class="tool-btn" aria-haspopup="true" aria-expanded="false" aria-controls="toolsMenu">Tools ▾</button>
+                <div id="toolsMenu" class="tools-menu" role="menu" aria-hidden="true">
+                  <input id="hiddenFile" type="file" style="display:none" accept=".txt,.py,.js,.html,.css,.md,.json,.xml,.csv" />
+                  <button id="toolUpload" class="tool-item" role="menuitem">📎 Upload File</button>
+                  <button id="toolWeb" class="tool-item" role="menuitem" aria-pressed="false">🌐 Web Search</button>
+                  <button id="toolVoice" class="tool-item" role="menuitem">🎤 Voice Input</button>
+                </div>
+              </div>
+              <button id="btnSend" class="send-btn">Send</button>
+            </div>
+            <div id="slashBox" class="slash" role="listbox" aria-hidden="true"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="dlgTopic" class="overlay" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="dlgTopicTitle">
+    <div class="dialog" tabindex="-1">
+      <div class="dialog-head">
+        <h3 id="dlgTopicTitle" class="dialog-title">Edit Conversation Topic</h3>
+        <button class="dialog-close" aria-label="Close" data-close="dlgTopic">×</button>
+      </div>
+      <div class="dialog-body">
+        <div class="topic-area">
+          <label for="modalTopic">Topic</label>
+          <select id="modalTopic" class="select">
+            <option value="">No topic</option>
+            <option value="__new__">+ Create new topic</option>
+          </select>
+          <label for="modalSubtopic">Sub-topic</label>
+          <select id="modalSubtopic" class="select" disabled>
+            <option value="">No sub-topic</option>
+            <option value="__new__">+ Create new sub-topic</option>
+          </select>
+        </div>
+        <div style="margin-top:14px; display:flex; gap:8px; justify-content:flex-end;">
+          <button id="btnTopicRemove" class="pill danger">Remove Topic</button>
+          <button id="btnTopicSave" class="pill">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="dlgDelete" class="overlay" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="dlgDeleteTitle">
+    <div class="dialog" tabindex="-1" style="max-width: 460px;">
+      <div class="dialog-head">
+        <h3 id="dlgDeleteTitle" class="dialog-title">Delete Conversation</h3>
+        <button class="dialog-close" aria-label="Close" data-close="dlgDelete">×</button>
+      </div>
+      <div class="dialog-body">
+        <p style="margin-top:0">Delete this conversation and all its memories? This cannot be undone.</p>
+        <div style="display:flex; gap:8px; justify-content:flex-end; margin-top: 14px;">
+          <button class="pill" data-close="dlgDelete">Cancel</button>
+          <button id="btnConfirmDelete" class="pill danger">Delete</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="dlgTopicDelete" class="overlay" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="dlgTopicDeleteTitle">
+    <div class="dialog" tabindex="-1" style="max-width: 520px;">
+      <div class="dialog-head">
+        <h3 id="dlgTopicDeleteTitle" class="dialog-title">Delete Topic</h3>
+        <button class="dialog-close" aria-label="Close" data-close="dlgTopicDelete">×</button>
+      </div>
+      <div class="dialog-body">
+        <div id="topicDeleteSummary" style="font-size:0.96rem; line-height:1.5;"></div>
+        <div style="display:flex; gap:8px; justify-content:flex-end; margin-top: 14px;">
+          <button class="pill" data-close="dlgTopicDelete">Cancel</button>
+          <button id="btnConfirmTopicDelete" class="pill danger">Delete</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toasts" class="toasts" aria-live="polite" aria-atomic="true"></div>
+
+  <script>
+    const el = (id) => document.getElementById(id);
+    const qs = (sel, root=document) => root.querySelector(sel);
+    const qsa = (sel, root=document) => [...root.querySelectorAll(sel)];
+
+    let selectedModel = null;
+    let models = [];
+    let filteredModels = [];
+    let files = [];
+    let filteredFiles = [];
+    let conversations = [];
+    let hasMoreConversations = false;
+    let conversationsOffset = 0;
+    let currentConversationId = null;
+    let currentTopic = null;
+    let currentSubtopic = null;
+    let topicsMap = {};
+    let slashIndex = -1;
+    let slashVisible = false;
+    let toolsOpen = false;
+    let webSearchEnabled = false;
+    let recognition = null;
+    let isRecording = false;
+    let streamEnabled = false;
+
+    const pending = new Map();
+    function withTimeout(ms, controller) {
+      return setTimeout(() => controller.abort(), ms);
+    }
+    async function apiJSON(url, options={}) {
+      const controller = new AbortController();
+      const id = Date.now() + '_' + Math.random().toString(36).slice(2);
+      pending.set(id, controller);
+      const timer = withTimeout(options.timeout || 20000, controller);
+      try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        return data;
+      } finally {
+        clearTimeout(timer);
+        pending.delete(id);
+      }
+    }
+
+    function toast(msg, type='info', ms=3000) {
+      const t = document.createElement('div');
+      t.className = `toast ${type==='success'?'success':''} ${type==='error'?'error':''}`;
+      t.textContent = msg;
+      el('toasts').appendChild(t);
+      setTimeout(() => t.remove(), ms);
+    }
+
+    function openDialog(overlayId) {
+      const overlay = el(overlayId);
+      overlay.setAttribute('aria-hidden', 'false');
+      const dlg = qs('.dialog', overlay);
+      const focusable = qsa('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])', dlg).filter(n => !n.hasAttribute('disabled'));
+      let first = focusable[0], last = focusable[focusable.length-1];
+      function trap(e) {
+        if (e.key === 'Tab') {
+          if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+          else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        } else if (e.key === 'Escape') {
+          closeDialog(overlayId);
+        }
+      }
+      dlg.addEventListener('keydown', trap);
+      setTimeout(() => (first || dlg).focus(), 0);
+    }
+    function closeDialog(overlayId) {
+      const overlay = el(overlayId);
+      overlay.setAttribute('aria-hidden', 'true');
+    }
+    document.addEventListener('click', (e) => {
+      const btnClose = e.target.closest('[data-close]');
+      if (btnClose) closeDialog(btnClose.getAttribute('data-close'));
+      qsa('.profile-menu').forEach(m => m.setAttribute('aria-hidden','true'));
+      el('btnProfile').setAttribute('aria-expanded','false');
+      if (!qs('#toolsMenu:hover') && !qs('#btnTools:hover')) {
+        el('toolsMenu').setAttribute('aria-hidden','true');
+        el('btnTools').setAttribute('aria-expanded','false');
+        toolsOpen = false;
+      }
+    });
+
+    el('btnSidebar').addEventListener('click', () => {
+      const sb = el('sidebar');
+      const isOpen = sb.classList.toggle('open');
+      el('btnSidebar').setAttribute('aria-expanded', String(isOpen));
+      const om = el('overlayMenu');
+      om.classList.toggle('show', isOpen);
+      om.setAttribute('aria-hidden', String(!isOpen));
+    });
+    el('overlayMenu').addEventListener('click', () => {
+      el('sidebar').classList.remove('open');
+      el('overlayMenu').classList.remove('show');
+      el('btnSidebar').setAttribute('aria-expanded', 'false');
+    });
+
+    el('btnProfile').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const menu = el('profileMenu');
+      const isHidden = menu.getAttribute('aria-hidden') !== 'false';
+      menu.setAttribute('aria-hidden', String(!isHidden));
+      el('btnProfile').setAttribute('aria-expanded', String(isHidden));
+    });
+
+    el('menuAPIKeys').addEventListener('click', () => location.href='/secrets');
+    el('menuPersonalModels').addEventListener('click', () => location.href='/personal-models');
+    el('menuTraining').addEventListener('click', () => location.href='/training');
+    el('menuCredits').addEventListener('click', () => toast('Credits page coming soon', 'info'));
+    el('menuSettings').addEventListener('click', () => openDialog('dlgTopic'));
+    el('menuSignOut').addEventListener('click', () => { if (confirm('Sign out?')) location.href = '/login'; });
+
+    function setupCombobox(input, listEl, options, onSelect) {
+      let activeIndex = -1;
+      function render(list) {
+        listEl.innerHTML = '';
+        list.forEach((opt, i) => {
+          const d = document.createElement('div');
+          d.className = 'dropdown-option';
+          d.setAttribute('role','option');
+          d.setAttribute('aria-selected', String(i===activeIndex));
+          d.tabIndex = -1;
+          d.innerHTML = `<div style="font-weight:600">${opt.name || opt.filename || opt.id}</div><div style="opacity:.75;font-size:.8rem">${opt.id || (opt.file_type||'')}</div>`;
+          d.addEventListener('click', () => {
+            onSelect(opt);
+            listEl.setAttribute('aria-hidden','true');
+            input.setAttribute('aria-expanded','false');
+            input.value = opt.name || opt.filename || opt.id;
+            input.blur();
+          });
+          listEl.appendChild(d);
+        });
+        listEl.setAttribute('aria-hidden', list.length ? 'false' : 'true');
+        input.setAttribute('aria-expanded', list.length ? 'true' : 'false');
+      }
+      input.addEventListener('focus', () => { activeIndex = -1; render(options()); });
+      input.addEventListener('input', () => {
+        const term = input.value.toLowerCase();
+        const filtered = options().filter(o =>
+          (o.name||'').toLowerCase().includes(term) ||
+          (o.id||'').toLowerCase().includes(term) ||
+          (o.filename||'').toLowerCase().includes(term)
+        );
+        activeIndex = -1; render(filtered);
+      });
+      input.addEventListener('keydown', (e) => {
+        const items = qsa('.dropdown-option', listEl);
+        if (e.key==='ArrowDown' && items.length) { e.preventDefault(); activeIndex = (activeIndex+1)%items.length; render(options()); items[activeIndex].scrollIntoView({block:'nearest'}); }
+        if (e.key==='ArrowUp' && items.length) { e.preventDefault(); activeIndex = activeIndex<=0?items.length-1:activeIndex-1; render(options()); items[activeIndex].scrollIntoView({block:'nearest'}); }
+        if (e.key==='Enter' && activeIndex>=0 && items[activeIndex]) { e.preventDefault(); items[activeIndex].click(); }
+        if (e.key==='Escape') { listEl.setAttribute('aria-hidden','true'); input.setAttribute('aria-expanded','false'); input.blur(); }
+      });
+      input.addEventListener('blur', () => setTimeout(() => {
+        listEl.setAttribute('aria-hidden','true'); input.setAttribute('aria-expanded','false');
+      }, 150));
+    }
+
+    const slashCommands = [
+      { cmd:'/files', desc:'List uploaded files', usage:'/files' },
+      { cmd:'/view', desc:'Display file content', usage:'/view filename.txt' },
+      { cmd:'/delete', desc:'Delete a file', usage:'/delete filename.txt' },
+      { cmd:'/search', desc:'Search files', usage:'/search term' },
+      { cmd:'/topics', desc:'List topics and sub-topics', usage:'/topics' },
+      { cmd:'/link', desc:'Link message to topic', usage:'/link cooking' },
+      { cmd:'/unlink', desc:'Remove links between topics', usage:'/unlink cooking' },
+      { cmd:'/delete-topic', desc:'Delete a topic (with confirmation)', usage:'/delete-topic cooking' },
+      { cmd:'/delete-subtopic', desc:'Delete a subtopic (with confirmation)', usage:'/delete-subtopic cooking recipes' },
+    ];
+    function showSlash(input) {
+      const box = el('slashBox');
+      const text = input.value;
+      if (!text.startsWith('/')) { hideSlash(); return; }
+      const q = text.slice(1).toLowerCase();
+      const list = q ? slashCommands.filter(c => c.cmd.slice(1).startsWith(q)) : slashCommands;
+      if (!list.length) { hideSlash(); return; }
+      box.innerHTML = '';
+      list.forEach((c,i) => {
+        const item = document.createElement('div');
+        item.className = 'slash-item';
+        item.setAttribute('role','option');
+        item.setAttribute('aria-selected', String(i===slashIndex));
+        item.innerHTML = `<div style="font-weight:600;color:#93c5fd">${c.cmd}</div><div style="opacity:.85">${c.desc}</div><div style="opacity:.7;font-family:ui-monospace,Menlo,Consolas">Usage: ${c.usage}</div>`;
+        item.addEventListener('click', () => {
+          input.value = c.usage;
+          hideSlash();
+          input.focus();
+          const pos = input.value.length; input.setSelectionRange(pos,pos);
+        });
+        box.appendChild(item);
+      });
+      box.setAttribute('aria-hidden','false');
+      slashVisible = true;
+    }
+    function hideSlash() {
+      el('slashBox').setAttribute('aria-hidden','true');
+      slashVisible = false; slashIndex = -1;
+    }
+
+    function renderMarkdown(md) {
+      const html = marked.parse(md || '');
+      const clean = DOMPurify.sanitize(html, { ALLOW_DATA_ATTR: false, ADD_ATTR: ['target','rel'] });
+      const temp = document.createElement('div');
+      temp.innerHTML = clean;
+      qsa('a', temp).forEach(a => { a.setAttribute('target','_blank'); a.setAttribute('rel','nofollow noopener noreferrer'); });
+      return temp.innerHTML;
+    }
+
+    function addMessage({ id, role, content, info }) {
+      const wrap = document.createElement('div');
+      wrap.className = `message ${role}`;
+      wrap.id = id || ('msg_' + Date.now() + '_' + Math.random().toString(36).slice(2));
+      if (role === 'assistant') {
+        const rendered = renderMarkdown(content);
+        wrap.innerHTML = `<div>${rendered}</div>${info?`<div style="opacity:.7;font-size:.8rem;margin-top:6px">${info}</div>`:''}<div class="msg-actions"><button class="pill" data-copy="${wrap.id}">Copy</button><div class="pill-group"><button class="pill success" data-feedback="great_response" data-mid="${wrap.id}">Great response</button>${content.includes('```')?`<button class="pill warn" data-feedback="that_worked" data-mid="${wrap.id}">That worked</button>`:''}<button class="pill danger" data-feedback="not_helpful" data-mid="${wrap.id}">Not helpful</button></div></div>`;
+        qsa('pre', wrap).forEach(pre => {
+          const btn = document.createElement('button'); btn.className='code-copy'; btn.type='button'; btn.textContent='Copy';
+          btn.addEventListener('click', () => {
+            const code = pre.querySelector('code'); const text = code ? code.textContent : pre.textContent;
+            navigator.clipboard.writeText(text||'').then(()=>{ btn.textContent='Copied'; setTimeout(()=>btn.textContent='Copy',1800); });
+          });
+          const code = pre.querySelector('code'); let lang='';
+          if (code) {
+            for (const c of code.classList) {
+              if (c.startsWith('language-')) { lang = c.replace('language-',''); break; }
+              if (c.startsWith('hljs-')) { lang = c.replace('hljs-',''); break; }
+            }
+          }
+          if (lang) { const lbl = document.createElement('div'); lbl.className='code-lang'; lbl.textContent=lang; pre.appendChild(lbl); }
+          pre.appendChild(btn);
+        });
+      } else if (role === 'system') {
+        wrap.textContent = content;
+      } else {
+        wrap.innerHTML = `<div>${content}</div>${info?`<div style="opacity:.7;font-size:.8rem;margin-top:6px">${info}</div>`:''}`;
+      }
+      const cm = el('chatMessages');
+      cm.appendChild(wrap);
+      cm.scrollTop = cm.scrollHeight;
+      return wrap.id;
+    }
+
+    function showTyping() {
+      const d = document.createElement('div');
+      d.className='typing'; d.id='typing';
+      d.innerHTML = `<span>Thinking</span><div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+        <button id="btnStop" class="pill danger" style="margin-left:8px">Stop</button>`;
+      el('chatMessages').appendChild(d);
+      el('chatMessages').scrollTop = el('chatMessages').scrollHeight;
+      const btnStop = el('btnStop');
+      if (btnStop) {
+        btnStop.addEventListener('click', () => {
+          if (window.currentStreamAbort) window.currentStreamAbort();
+          hideTyping();
+        });
+      }
+    }
+    function hideTyping() { const t = el('typing'); if (t) t.remove(); }
+
+    el('btnTools').addEventListener('click', (e) => {
+      e.stopPropagation();
+      toolsOpen = !toolsOpen;
+      el('toolsMenu').setAttribute('aria-hidden', String(!toolsOpen));
+      el('btnTools').setAttribute('aria-expanded', String(toolsOpen));
+    });
+    el('toolUpload').addEventListener('click', () => el('hiddenFile').click());
+    el('hiddenFile').addEventListener('change', async (e) => {
+      const file = e.target.files?.[0]; if (!file) return;
+      try {
+        const form = new FormData(); form.append('file', file);
+        toast('Uploading file...','info',1500);
+        const res = await fetch('/api/upload-file',{ method:'POST', body:form });
+        if (!res.ok) throw new Error('Upload failed');
+        toast('File uploaded','success');
+      } catch (err) {
+        toast('Upload failed','error');
+      }
+    });
+    el('toolWeb').addEventListener('click', (e) => {
+      webSearchEnabled = !webSearchEnabled;
+      e.currentTarget.setAttribute('aria-pressed', String(webSearchEnabled));
+      toast(`Web search ${webSearchEnabled?'enabled':'disabled'}`,'info',1500);
+    });
+
+    el('streamToggle').addEventListener('click', (e) => {
+      streamEnabled = !streamEnabled;
+      e.currentTarget.setAttribute('aria-pressed', String(streamEnabled));
+      e.currentTarget.textContent = streamEnabled ? 'On' : 'Off';
+      toast(`Streaming ${streamEnabled ? 'enabled' : 'disabled'}`, 'info', 1200);
+    });
+
+    function initVoice() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) { el('toolVoice').style.display='none'; return; }
+      recognition = new SR();
+      recognition.continuous=false; recognition.interimResults=false; recognition.lang='en-US';
+      recognition.onstart = ()=>{ isRecording=true; toast('Listening...','info',1200); };
+      recognition.onresult = (ev)=>{ const t = ev.results[0]?.[0]?.transcript||''; el('txtMessage').value=t; autoResize(); };
+      recognition.onerror = ()=>{ isRecording=false; };
+      recognition.onend = ()=>{ isRecording=false; };
+      el('toolVoice').addEventListener('click', () => { if (!isRecording) recognition.start(); else recognition.stop(); });
+    }
+
+    function autoResize() {
+      const ta = el('txtMessage');
+      ta.style.height='auto';
+      const nh = Math.max(22, Math.min(140, ta.scrollHeight));
+      ta.style.height = nh + 'px';
+    }
+
+    async function sendImplicitFeedback(messageId, actionType, score) {
+      try {
+        await fetch('/api/feedback-implicit', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ message_id: messageId, action_type: actionType, feedback_score: score })
+        });
+      } catch {}
+    }
+    async function submitFeedback(messageId, feedbackType, button) {
+      const group = button.parentElement;
+      qsa('.pill', group).forEach(b => b.classList.remove('active'));
+      button.classList.add('active');
+      try {
+        const res = await fetch('/api/feedback', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ message_id: messageId, feedback_type: feedbackType })
+        });
+        if (res.ok) {
+          await refreshUF();
+          toast('Feedback recorded','success',1500);
+        } else {
+          toast('Failed to submit feedback','error');
+        }
+      } catch {
+        toast('Network error during feedback','error');
+      }
+    }
+
+    el('chatMessages').addEventListener('click', (e) => {
+      const copyBtn = e.target.closest('[data-copy]');
+      if (copyBtn) {
+        const id = copyBtn.getAttribute('data-copy');
+        const node = el(id)?.cloneNode(true);
+        if (node) {
+          qsa('.msg-actions', node).forEach(n=>n.remove());
+          navigator.clipboard.writeText(node.textContent.trim()).then(()=>{
+            toast('Copied','success',1200);
+            sendImplicitFeedback(id,'copy',0.3);
+          });
+        }
+      }
+      const fbBtn = e.target.closest('[data-feedback]');
+      if (fbBtn) {
+        const type = fbBtn.getAttribute('data-feedback');
+        const messageId = fbBtn.getAttribute('data-mid');
+        submitFeedback(messageId, type, fbBtn);
+      }
+    });
+
+    function ensureAssistantContainer() {
+      const id = 'assist_stream_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+      const msgId = addMessage({ id, role:'assistant', content:'' });
+      return msgId || id;
+    }
+    function updateAssistantMessage(id, fullText) {
+      const node = el(id);
+      if (!node) return;
+      const rendered = renderMarkdown(fullText);
+      node.innerHTML = `<div>${rendered}</div><div class="msg-actions"><button class="pill" data-copy="${id}">Copy</button><div class="pill-group"><button class="pill success" data-feedback="great_response" data-mid="${id}">Great response</button>${fullText.includes('```')?`<button class="pill warn" data-feedback="that_worked" data-mid="${id}">That worked</button>`:''}<button class="pill danger" data-feedback="not_helpful" data-mid="${id}">Not helpful</button></div></div>`;
+      qsa('pre', node).forEach(pre => {
+        const btn = document.createElement('button'); btn.className='code-copy'; btn.type='button'; btn.textContent='Copy';
+        btn.addEventListener('click', () => {
+          const code = pre.querySelector('code'); const text = code ? code.textContent : pre.textContent;
+          navigator.clipboard.writeText(text||'').then(()=>{ btn.textContent='Copied'; setTimeout(()=>btn.textContent='Copy',1800); });
+        });
+        const code = pre.querySelector('code'); let lang='';
+        if (code) {
+          for (const c of code.classList) {
+            if (c.startsWith('language-')) { lang = c.replace('language-',''); break; }
+            if (c.startsWith('hljs-')) { lang = c.replace('hljs-',''); break; }
+          }
+        }
+        if (lang) { const lbl = document.createElement('div'); lbl.className='code-lang'; lbl.textContent=lang; pre.appendChild(lbl); }
+        pre.appendChild(btn);
+      });
+      const cm = el('chatMessages');
+      cm.scrollTop = cm.scrollHeight;
+    }
+
+    async function streamChat(payload) {
+      const controller = new AbortController();
+      const readerCleanup = () => controller.abort();
+      window.currentStreamAbort = readerCleanup;
+      try {
+        const res = await fetch('/api/chat/stream', {
+          method:'POST', headers:{ 'Content-Type':'application/json' },
+          body: JSON.stringify(payload), signal: controller.signal
+        });
+        if (!res.ok || !res.body) {
+          const detail = await res.text().catch(()=> 'HTTP error');
+          return { error: detail || `HTTP ${res.status}` };
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let fullText = '';
+        const assistantId = ensureAssistantContainer();
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          while (true) {
+            const lineEnd = buffer.indexOf('\n');
+            if (lineEnd === -1) break;
+
+            const rawLine = buffer.slice(0, lineEnd);
+            buffer = buffer.slice(lineEnd + 1);
+
+            const line = rawLine.trim();
+            if (!line) continue;
+            if (line.startsWith(':')) continue;
+            if (!line.startsWith('data: ')) continue;
+
+            const data = line.slice(6).trim();
+            if (data === '[DONE]') {
+              break;
+            }
+            try {
+              const obj = JSON.parse(data);
+              const delta = obj.delta;
+              if (typeof delta === 'string' && delta.length) {
+                fullText += delta;
+                updateAssistantMessage(assistantId, fullText);
+              }
+            } catch { /* ignore non-JSON frames */ }
+          }
+        }
+        return { text: fullText };
+      } catch (e) {
+        if (e.name === 'AbortError') return { error: 'Stream cancelled' };
+        return { error: e.message || 'Stream error' };
+      } finally {
+        window.currentStreamAbort = null;
+      }
+    }
+
+    async function sendMessage() {
+      const ta = el('txtMessage');
+      const text = (ta.value || '').trim();
+      if (!text) return;
+      if (!selectedModel) { toast('Choose a model first','error'); return; }
+      el('btnSend').disabled = true; ta.disabled = true;
+      addMessage({ role:'user', content:text });
+      ta.value=''; autoResize();
+
+      showTyping();
+      try {
+        const payload = { message: text, model: selectedModel, conversation_id: currentConversationId };
+        if (webSearchEnabled) payload.web_search = true;
+
+        if (streamEnabled) {
+          const result = await streamChat(payload);
+          hideTyping();
+          if (result.error) {
+            addMessage({ role:'assistant', content:'Sorry, there was a streaming error. Please try again.', info: result.error });
+          } else {
+            // conversation ID may have been created in backend; refresh conversation list
+            loadConversations(false);
+          }
+        } else {
+          const data = await apiJSON('/api/chat', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify(payload), timeout: 60000
+          });
+          hideTyping();
+          if (data.conversation_id) currentConversationId = data.conversation_id;
+          if (data.response === 'DELETION_CONFIRM' && data.deletion_info) {
+            showTopicDeleteDialog(data.deletion_info);
+          } else {
+            addMessage({ role:'assistant', content: data.response, id: data.assistant_message_id || undefined });
+          }
+          loadConversations(false);
+        }
+      } catch (err) {
+        hideTyping();
+        addMessage({ role:'assistant', content:'Sorry, I encountered an error. Please try again.', info:'Error' });
+      } finally {
+        el('btnSend').disabled = false; ta.disabled = false; ta.focus();
+      }
+    }
+
+    function renderConversations() {
+      const root = el('conversations');
+      root.innerHTML = '';
+      conversations.forEach(c => {
+        const item = document.createElement('div');
+        item.className = 'conv' + (c.id === currentConversationId ? ' active' : '');
+        item.setAttribute('role','listitem');
+        const date = c.updated_at ? new Date(c.updated_at).toLocaleDateString() : '';
+        const topic = c.topic && c.topic !== 'general' ? `${c.topic}${c.sub_topic?' → '+c.sub_topic:''}` : '';
+        const preview = c.last_message ? (c.last_message.length > 60 ? c.last_message.slice(0,60)+'…' : c.last_message) : '';
+        item.innerHTML = `
+          <div style="min-width:0;overflow:hidden;">
+            <div class="conv-title" title="${c.title||''}">${c.title || 'Untitled'}</div>
+            ${topic?`<div style="font-size:.75rem;opacity:.8">${topic}</div>`:''}
+            ${preview?`<div style="font-size:.75rem;opacity:.6;font-style:italic;">${preview}</div>`:''}
+            <div class="conv-meta">${date} • ${c.message_count||0} messages</div>
+          </div>
+          <div><button class="pill danger" data-del="${c.id}">Delete</button></div>
+        `;
+        item.addEventListener('click', (ev) => { if (ev.target.closest('[data-del]')) return; loadConversation(c.id); });
+        root.appendChild(item);
+      });
+      if (hasMoreConversations) {
+        const more = document.createElement('div');
+        more.innerHTML = `<button class="btn" id="btnMoreConvs">Load More Conversations</button>`;
+        root.appendChild(more);
+        el('btnMoreConvs').addEventListener('click', () => loadMoreConversations());
+      }
+    }
+    el('conversations').addEventListener('click', (e) => {
+      const delBtn = e.target.closest('[data-del]');
+      if (delBtn) { const id = delBtn.getAttribute('data-del'); showDeleteDialog(id); }
+    });
+
+    let conversationToDelete = null;
+    function showDeleteDialog(id) { conversationToDelete = id; openDialog('dlgDelete'); }
+    el('btnConfirmDelete').addEventListener('click', async () => {
+      if (!conversationToDelete) return;
+      try {
+        const res = await fetch(`/api/conversations/${conversationToDelete}`, { method:'DELETE' });
+        if (res.ok) {
+          conversations = conversations.filter(c => c.id !== conversationToDelete);
+          if (currentConversationId === conversationToDelete) {
+            currentConversationId = null; showWelcome(); el('topicDisplay').textContent = 'No topic assigned';
+          }
+          renderConversations(); toast('Conversation deleted','success',1500);
+        } else {
+          const err = await res.json().catch(()=>({detail:'Delete failed'}));
+          toast(err.detail || 'Delete failed','error');
+        }
+      } catch { toast('Network error deleting conversation','error'); }
+      finally { closeDialog('dlgDelete'); }
+    });
+
+    function showWelcome() {
+      el('chatMessages').innerHTML = `
+        <div class="welcome">
+          <div><img src="/static/neurolm-welcome-image.png" alt="" style="max-width: 520px; width: 90%; height: auto; opacity:.9;" /></div>
+          <div><h2 style="margin:10px 0 4px 0;">Welcome Back</h2><p id="welcomeUser" style="margin:0; font-size:1rem;">${(window.userName||'User')}</p></div>
+        </div>
+      `;
+    }
+
+    async function loadConversation(conversationId) {
+      try {
+        const result = await apiJSON(`/api/conversations/${conversationId}/messages?limit=30`, { method:'GET' });
+        const cm = el('chatMessages'); cm.innerHTML = '';
+        (result.messages || []).forEach(m => {
+          addMessage({ id: m.id, role: m.message_type, content: m.content, info: m.message_type==='assistant'?'Loaded from conversation':null });
+        });
+        currentConversationId = conversationId;
+        const c = conversations.find(x => x.id === conversationId);
+        currentTopic = c?.topic || null;
+        currentSubtopic = c?.sub_topic || null;
+        updateTopicDisplay();
+      } catch { toast('Failed to load conversation','error'); }
+    }
+
+    function updateTopicDisplay() {
+      if (currentTopic && currentTopic !== 'general') {
+        el('topicDisplay').textContent = currentTopic + (currentSubtopic?` → ${currentSubtopic}`:'');
+      } else {
+        el('topicDisplay').textContent = 'No topic assigned';
+      }
+    }
+
+    async function loadConversations(reset=false) {
+      try {
+        if (reset) { conversationsOffset = 0; conversations = []; }
+        let url = `/api/conversations?limit=20&offset=${conversationsOffset}`;
+        const t = el('topicSelect').value;
+        const s = el('subtopicSelect').value;
+        if (t && t !== '__new__') url += `&topic=${encodeURIComponent(t)}`;
+        if (s && s !== '__new__') url += `&sub_topic=${encodeURIComponent(s)}`;
+        const result = await apiJSON(url, { method:'GET' });
+        if (reset) conversations = result.conversations || [];
+        else conversations = conversations.concat(result.conversations || []);
+        hasMoreConversations = !!result.has_more;
+        conversationsOffset = result.next_offset || 0;
+        renderConversations();
+      } catch { toast('Error loading conversations','error'); }
+    }
+    async function loadMoreConversations() { if (!hasMoreConversations) return; await loadConversations(false); }
+
+    async function loadTopics() {
+      try {
+        const data = await apiJSON('/api/topics', { method:'GET' });
+        topicsMap = data || {};
+        const topicSel = el('topicSelect');
+        topicSel.innerHTML = '<option value="">All topics</option><option value="__new__">+ Create new topic</option>';
+        Object.keys(topicsMap).forEach(t => {
+          const opt = document.createElement('option'); opt.value = t; opt.textContent = t; topicSel.appendChild(opt);
+        });
+        updateSubtopics();
+      } catch {}
+    }
+    function updateSubtopics() {
+      const sub = el('subtopicSelect');
+      const t = el('topicSelect').value;
+      sub.innerHTML = '<option value="">All sub-topics</option>';
+      if (t && t !== '__new__' && topicsMap[t]) {
+        sub.disabled = false;
+        topicsMap[t].forEach(st => {
+          const opt = document.createElement('option'); opt.value = st; opt.textContent = st; sub.appendChild(opt);
+        });
+        const count = topicsMap[t].length;
+        if (count < 5) {
+          const opt = document.createElement('option'); opt.value = '__new__'; opt.textContent = '+ Create new sub-topic'; sub.appendChild(opt);
+        }
+      } else {
+        sub.disabled = true;
+      }
+    }
+
+    async function createTopicNow(name) {
+      try {
+        const res = await fetch('/api/topics', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name }) });
+        if (!res.ok) throw new Error('Create topic failed');
+        await loadTopics();
+        return true;
+      } catch { toast('Error creating topic','error'); return false; }
+    }
+    async function createSubtopicNow(topic, name) {
+      try {
+        const res = await fetch(`/api/topics/${encodeURIComponent(topic)}/subtopics`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name }) });
+        if (!res.ok) throw new Error('Create subtopic failed');
+        await loadTopics();
+        return true;
+      } catch { toast('Error creating sub-topic','error'); return false; }
+    }
+
+    el('topicSelect').addEventListener('change', async function() {
+      let v = this.value;
+      if (v === '__new__') {
+        const t = prompt('Enter new topic name:');
+        if (t && t.trim()) {
+          const ok = await createTopicNow(t.trim());
+          if (ok) { v = t.trim().toLowerCase(); this.value = v; }
+          else { v=''; this.value=''; }
+        } else { v=''; this.value=''; }
+      }
+      updateSubtopics();
+      await loadConversations(true);
+    });
+    el('subtopicSelect').addEventListener('change', async function() {
+      let v = this.value;
+      if (v === '__new__') {
+        const t = el('topicSelect').value;
+        if (!t || t==='__new__') { toast('Select a topic first','error'); this.value=''; return; }
+        const st = prompt('Enter new sub-topic name:');
+        if (st && st.trim()) {
+          const ok = await createSubtopicNow(t, st.trim());
+          if (ok) { v = st.trim().toLowerCase(); this.value = v; }
+          else { v=''; this.value=''; }
+        } else { v=''; this.value=''; }
+      }
+      await loadConversations(true);
+    });
+
+    el('btnEditTopic').addEventListener('click', async () => {
+      const mt = el('modalTopic');
+      const mst = el('modalSubtopic');
+      mt.innerHTML = '<option value="">No topic</option><option value="__new__">+ Create new topic</option>';
+      Object.keys(topicsMap).forEach(t => {
+        const opt = document.createElement('option'); opt.value=t; opt.textContent=t; mt.appendChild(opt);
+      });
+      mt.value = currentTopic || '';
+      updateModalSubtopics();
+      mst.value = currentSubtopic || '';
+      openDialog('dlgTopic');
+    });
+    function updateModalSubtopics() {
+      const mt = el('modalTopic').value;
+      const mst = el('modalSubtopic');
+      mst.innerHTML = '<option value="">No sub-topic</option>';
+      if (mt && mt!=='__new__' && topicsMap[mt]) {
+        mst.disabled = false;
+        topicsMap[mt].forEach(s => {
+          const opt = document.createElement('option'); opt.value=s; opt.textContent=s; mst.appendChild(opt);
+        });
+        if (topicsMap[mt].length < 5) {
+          const opt = document.createElement('option'); opt.value='__new__'; opt.textContent='+ Create new sub-topic'; mst.appendChild(opt);
+        }
+      } else {
+        mst.disabled = true;
+      }
+    }
+    el('modalTopic').addEventListener('change', updateModalSubtopics);
+
+    el('btnTopicSave').addEventListener('click', async () => {
+      if (!currentConversationId) { closeDialog('dlgTopic'); return; }
+      let topic = el('modalTopic').value;
+      let sub = el('modalSubtopic').value;
+      if (topic === '__new__') {
+        const t = prompt('Enter new topic name:'); if (!t || !t.trim()) return;
+        const ok = await createTopicNow(t.trim()); if (!ok) return;
+        topic = t.trim().toLowerCase();
+      }
+      if (sub === '__new__' && topic) {
+        const s = prompt('Enter new sub-topic name:'); if (!s || !s.trim()) return;
+        const ok = await createSubtopicNow(topic, s.trim()); if (!ok) return;
+        sub = s.trim().toLowerCase();
+      }
+      try {
+        const res = await fetch(`/api/conversations/${currentConversationId}/topic`, {
+          method:'PUT', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ topic: topic || null, sub_topic: sub || null })
+        });
+        if (res.ok) {
+          currentTopic = topic || null;
+          currentSubtopic = sub || null;
+          updateTopicDisplay();
+          closeDialog('dlgTopic');
+          loadConversations(true);
+        } else {
+          const err = await res.json().catch(()=>({detail:'Update failed'}));
+          toast(err.detail || 'Update failed','error');
+        }
+      } catch { toast('Network error updating topic','error'); }
+    });
+    el('btnTopicRemove').addEventListener('click', async () => {
+      if (!currentConversationId) { closeDialog('dlgTopic'); return; }
+      try {
+        const res = await fetch(`/api/conversations/${currentConversationId}/topic`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ topic: null, sub_topic: null }) });
+        if (res.ok) {
+          currentTopic = null; currentSubtopic = null;
+          updateTopicDisplay();
+          closeDialog('dlgTopic');
+          loadConversations(true);
+        } else {
+          const err = await res.json().catch(()=>({detail:'Remove failed'}));
+          toast(err.detail || 'Remove failed','error');
+        }
+      } catch { toast('Network error removing topic','error'); }
+    });
+
+    function showTopicDeleteDialog(info) {
+      const sum = el('topicDeleteSummary');
+      if (info.type === 'topic') {
+        el('dlgTopicDeleteTitle').textContent = 'Delete Topic';
+        sum.innerHTML = `
+          <p><strong>Topic:</strong> ${info.topic}</p>
+          <p><strong>Subtopics:</strong> ${info.subtopic_count}</p>
+          <p><strong>Conversations:</strong> ${info.conversation_count}</p>
+          <p><strong>Total messages:</strong> ${info.total_messages}</p>
+          <p style="color:#fca5a5;"><strong>Warning:</strong> This permanently deletes all related data.</p>
+        `;
+      } else {
+        el('dlgTopicDeleteTitle').textContent = 'Delete Subtopic';
+        sum.innerHTML = `
+          <p><strong>Topic:</strong> ${info.topic}</p>
+          <p><strong>Subtopic:</strong> ${info.subtopic}</p>
+          <p><strong>Conversations:</strong> ${info.conversation_count}</p>
+          <p><strong>Total messages:</strong> ${info.total_messages}</p>
+          <p style="color:#fca5a5;"><strong>Warning:</strong> This permanently deletes all related data.</p>
+        `;
+      }
+      el('dlgTopicDelete').dataset.payload = JSON.stringify(info);
+      openDialog('dlgTopicDelete');
+    }
+    el('btnConfirmTopicDelete').addEventListener('click', async () => {
+      try {
+        const info = JSON.parse(el('dlgTopicDelete').dataset.payload || '{}');
+        let url;
+        if (info.type === 'topic') {
+          url = `/api/topics/${encodeURIComponent(info.topic)}`;
+        } else {
+          url = `/api/topics/${encodeURIComponent(info.topic)}/subtopics/${encodeURIComponent(info.subtopic)}`;
+        }
+        const res = await fetch(url, { method:'DELETE' });
+        if (res.ok) {
+          const r = await res.json().catch(()=>({message:'Deleted'}));
+          toast(r.message || 'Deleted','success',1500);
+          await loadTopics();
+          await loadConversations(true);
+        } else {
+          const err = await res.json().catch(()=>({detail:'Delete failed'}));
+          toast(err.detail || 'Delete failed','error');
+        }
+      } catch { toast('Error during deletion','error'); }
+      finally { closeDialog('dlgTopicDelete'); }
+    });
+
+    el('btnNewChat').addEventListener('click', async () => {
+      try {
+        const payload = {};
+        const t = el('topicSelect').value;
+        const s = el('subtopicSelect').value;
+        if (t && t !== '__new__') { payload.topic = t; if (s && s !== '__new__') payload.sub_topic = s; }
+        const res = await fetch('/api/conversations/new', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+        if (!res.ok) { const err = await res.json().catch(()=>({detail:'Create failed'})); toast(err.detail,'error'); return; }
+        const conv = await res.json();
+        currentConversationId = conv.id;
+        el('chatMessages').innerHTML = '';
+        const greeting = (window.userName?`Hello, ${window.userName}!`:'Hello!') + " I'm NeuroLM with an integrated memory system. I can remember our conversations and learn from them. What would you like to talk about?";
+        let memoryInfo = 'Memory system active • Ready to learn';
+        if (payload.topic) memoryInfo += ` • Topic: ${payload.topic}${payload.sub_topic?` → ${payload.sub_topic}`:''}`;
+        addMessage({ role:'assistant', content: greeting, info: memoryInfo });
+        loadConversations(true);
+        loadTopics();
+      } catch {
+        toast('Error creating conversation','error');
+      }
+    });
+
+    setupCombobox(el('modelInput'), el('modelList'), () => filteredModels.length?filteredModels:models, (m)=>{ selectedModel = m.id; });
+    setupCombobox(el('fileInputBox'), el('fileList'), () => filteredFiles.length?filteredFiles:files, (f)=>{ el('txtMessage').value = `/view ${f.filename}`; autoResize(); });
+
+    async function loadModels() {
+      try {
+        const data = await apiJSON('/api/models', { method:'GET' });
+        models = data || [];
+        filteredModels = [...models];
+      } catch {
+        models = [
+          {"id":"meta-llama/llama-3.2-3b-instruct:free","name":"Llama 3.2 3B (Free)"},
+          {"id":"google/gemini-2.0-flash-001:free","name":"Gemini 2.0 Flash (Free)"}
+        ];
+        filteredModels = [...models];
+        el('modelInput').value = "Llama 3.2 3B (Free)";
+        selectedModel = models[0].id;
+      }
+    }
+
+    async function loadFiles() {
+      try {
+        const data = await apiJSON('/api/user-files', { method:'GET' });
+        files = data || [];
+        filteredFiles = [...files];
+        el('fileInputBox').value = files.length ? `${files.length} files available` : 'No files';
+      } catch {
+        el('fileInputBox').value = 'No files';
+      }
+    }
+
+    async function loadUserProfileHeader() {
+      try {
+        const data = await apiJSON('/api/user/name', { method:'GET' });
+        const firstName = data.first_name || 'User';
+        window.userName = firstName;
+        const initial = firstName.charAt(0).toUpperCase();
+        el('btnProfile').textContent = initial;
+        el('welcomeUser').textContent = firstName;
+        if (data.feedback_score !== undefined) el('ufScore').textContent = data.feedback_score;
+      } catch {}
+    }
+    async function refreshUF() {
+      try {
+        const data = await apiJSON('/api/user/name', { method:'GET' });
+        if (data.feedback_score !== undefined) el('ufScore').textContent = data.feedback_score;
+      } catch {}
+    }
+
+    el('txtMessage').addEventListener('input', (e) => {
+      const v = e.target.value;
+      if (v.startsWith('/')) showSlash(e.target); else hideSlash();
+      autoResize();
+    });
+    el('txtMessage').addEventListener('keydown', async (e) => {
+      if (slashVisible) {
+        const items = qsa('.slash-item', el('slashBox'));
+        if (e.key === 'ArrowDown' && items.length) {
+          e.preventDefault();
+          slashIndex = (slashIndex + 1) % items.length;
+          items.forEach((n,i)=>n.setAttribute('aria-selected', String(i===slashIndex)));
+          items[slashIndex].scrollIntoView({block:'nearest'});
+          return;
+        }
+        if (e.key === 'ArrowUp' && items.length) {
+          e.preventDefault();
+          slashIndex = (slashIndex <= 0 ? items.length-1 : slashIndex-1);
+          items.forEach((n,i)=>n.setAttribute('aria-selected', String(i===slashIndex)));
+          items[slashIndex].scrollIntoView({block:'nearest'});
+          return;
+        }
+        if (e.key === 'Enter' && slashIndex >= 0) {
+          e.preventDefault();
+          items[slashIndex].click();
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          hideSlash();
+          return;
+        }
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        hideSlash();
+        await sendMessage();
+      }
+    });
+
+    el('btnSend').addEventListener('click', sendMessage);
+
+    async function init() {
+      await Promise.allSettled([loadModels(), loadFiles(), loadConversations(true), loadTopics(), loadUserProfileHeader()]);
+      initVoice();
+      autoResize();
+      el('txtMessage').focus();
+    }
+    init();
+  </script>
+</body>
+</html>
