@@ -205,3 +205,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Ignore build outputs
+NeuroLMBlue/builds/
+NeuroLMBlue/desktop-app/dist/
+*.tar.gz
+*.exe
