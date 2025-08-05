@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Download NeuroLM Desktop - Run AI Models Locally</title>
+    <style>
+        :root {
+            --primary-color: #4f46e5;
+            --secondary-color: #4338ca;
+            --accent-color: #ff7d4d;
+            --dark-bg: #000000;
+            --darker-bg: #1a1a1a;
+            --card-bg: #2a2a2a;
+            --light-text: #ffffff;
+            --muted-text: #9ca3af;
+            --border-color: #404040;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 100%);
+            color: var(--light-text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header {
+            background: var(--dark-bg);
+            color: var(--light-text);
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+            position: relative;
+            min-height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header h1 {
+            font-size: 1.2rem;
+            margin: 0;
+            color: var(--light-text);
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .header-title {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .hamburger-btn {
+            background: none;
+            border: none;
+            color: var(--light-text);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 4px;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+        }
+
+        .hamburger-btn:hover {
+            background: rgba(255,255,255,0.1);
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .uf-score-badge {
+            background: linear-gradient(45deg, #3b82f6, #1d4ed8);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: bold;
+            margin-left: auto;
+            margin-right: 1rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            position: relative;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+        }
+
+        .uf-score-badge:hover {
+            transform: translateY(-1px);
+        }
+
+        .settings-button {
+            background: rgba(31, 41, 55, 0.8);
+            border: 1px solid rgba(75, 85, 99, 0.5);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #ffffff;
+            font-weight: 600;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .settings-button:hover {
+            background: rgba(75, 85, 99, 1);
+            border-color: #4f46e5;
+        }
+
+        .model-search-container,
+        .file-search-container {
+            position: relative;
+        }
+
+        .model-dropdown,
+        .file-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 1000;
+            display: none;
+        }
+
+        .main-content {
+            flex: 1;
+            padding: 4rem 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        .hero-section {
+            text-align: center;
+            margin-bottom: 4rem;
+        }
+
+        .hero-title {
+            font-size: 3rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            background: linear-gradient(45deg, #ffffff, #cccccc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hero-subtitle {
+            font-size: 1.3rem;
+            color: #cccccc;
+            margin-bottom: 2rem;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+            line-height: 1.5;
+        }
+
+        .hero-logo {
+            width: 120px;
+            height: 120px;
+            margin: 0 auto 2rem auto;
+            display: block;
+            filter: drop-shadow(0 0 20px rgba(0, 212, 255, 0.3));
+        }
+
+        .download-section {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 3rem;
+            margin-bottom: 3rem;
+            text-align: center;
+        }
+
+        .download-title {
+            font-size: 2rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: #ffffff;
+        }
+
+        .download-description {
+            color: #cccccc;
+            font-size: 1.1rem;
+            margin-bottom: 2.5rem;
+            line-height: 1.6;
+        }
+
+        .download-buttons {
+            display: flex;
+            gap: 1.5rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .download-btn {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 1rem 2rem;
+            background: linear-gradient(45deg, #0066ff, #00d4ff);
+            color: #ffffff;
+            border: none;
+            border-radius: 12px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            min-width: 200px;
+            justify-content: center;
+        }
+
+        .download-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 212, 255, 0.4);
+        }
+
+        .download-btn.coming-soon {
+            background: rgba(255, 255, 255, 0.1);
+            color: #cccccc;
+            cursor: not-allowed;
+        }
+
+        .download-btn.coming-soon:hover {
+            transform: none;
+            box-shadow: none;
+        }
+        
+        .download-btn.downloading {
+            background: linear-gradient(45deg, #ff6b6b, #ffa500);
+            animation: pulse 1.5s ease-in-out infinite alternate;
+        }
+        
+        .download-btn.ready {
+            background: linear-gradient(45deg, #10b981, #00d4aa);
+            border: 2px solid #10b981;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 0.8; }
+            100% { opacity: 1; }
+        }
+        
+        .cancel-btn {
+            cursor: pointer;
+            color: #ffffff;
+            margin-left: 8px;
+            font-weight: bold;
+            transition: all 0.2s;
+            background: #ff4757;
+            padding: 4px 8px;
+            border-radius: 6px;
+            border: 2px solid #ff4757;
+            font-size: 0.9rem;
+            box-shadow: 0 2px 8px rgba(255, 71, 87, 0.4);
+            display: inline-block;
+        }
+        
+        .cancel-btn:hover {
+            background: #ff3838;
+            border-color: #ff3838;
+            box-shadow: 0 4px 12px rgba(255, 71, 87, 0.6);
+            transform: translateY(-1px);
+        }
+        
+        .download-progress {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            width: 100%;
+            gap: 8px;
+        }
+        
+        .progress-text {
+            flex: 1;
+        }
+
+        .download-icon {
+            font-size: 1.5rem;
+        }
+
+        .features-section {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .feature-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 2rem;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+
+        .feature-card:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(0, 212, 255, 0.3);
+            transform: translateY(-4px);
+        }
+
+        .feature-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            display: block;
+        }
+
+        .feature-title {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: #ffffff;
+        }
+
+        .feature-description {
+            color: #cccccc;
+            line-height: 1.6;
+        }
+
+        .requirements-section {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .requirements-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            color: #00d4ff;
+            text-align: center;
+        }
+
+        .requirements-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 2rem;
+        }
+
+        .requirement-item {
+            text-align: center;
+        }
+
+        .requirement-label {
+            font-weight: 600;
+            color: #ffffff;
+            margin-bottom: 0.5rem;
+        }
+
+        .requirement-value {
+            color: #cccccc;
+            font-size: 0.9rem;
+        }
+
+        .footer {
+            background: rgba(0, 0, 0, 0.8);
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 2rem;
+            text-align: center;
+            color: #cccccc;
+        }
+
+        .footer-links {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-bottom: 1rem;
+        }
+
+        .footer-link {
+            color: #cccccc;
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.2s ease;
+        }
+
+        .footer-link:hover {
+            color: #00d4ff;
+        }
+
+        @media (max-width: 768px) {
+            .hero-title {
+                font-size: 2rem;
+            }
+
+            .hero-subtitle {
+                font-size: 1.1rem;
+            }
+
+            .download-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .download-btn {
+                width: 100%;
+                max-width: 300px;
+            }
+
+            .main-content {
+                padding: 2rem 1rem;
+            }
+
+            .download-section {
+                padding: 2rem;
+            }
+        }
+        
+        .system-detected {
+            margin-top: 1.5rem;
+            color: #00d4ff;
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+        
+        .download-btn {
+            position: relative;
+        }
+        
+        .download-btn.recommended {
+            border: 2px solid #00d4ff;
+            box-shadow: 0 0 20px rgba(0, 212, 255, 0.3);
+        }
+        
+        .download-btn.recommended::before {
+            content: "Recommended for your system";
+            position: absolute;
+            top: -8px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #00d4ff;
+            color: #000000;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <button id="sidebarToggle" class="hamburger-btn">☰</button>
+            <div class="header-title">
+                <h1 onclick="showWelcomeScreen()" style="cursor: pointer;">NeuroLM Chat</h1>
+                <p>AI chat with integrated memory system</p>
+            </div>
+        </div>
+        
+        <div style="margin-left: 1rem; display: inline-block;">
+            <label for="modelSearch" style="margin-right: 0.3rem; font-size: 0.7rem;">Model:</label>
+            <div class="model-search-container" style="display: inline-block;">
+                <input type="text" id="modelSearch" placeholder="Choose AI" readonly style="min-width: 150px; font-size: 0.8rem; padding: 0.2rem;">
+                <div class="model-dropdown" id="modelDropdown"></div>
+            </div>
+        </div>
+        
+        <div style="margin-left: 1rem; display: inline-block;">
+            <label for="fileSearch" style="margin-right: 0.3rem; font-size: 0.7rem;">Files:</label>
+            <div class="file-search-container" style="display: inline-block;">
+                <input type="text" id="fileSearch" placeholder="Search files..." readonly style="min-width: 150px; font-size: 0.8rem; padding: 0.2rem;">
+                <div class="file-dropdown" id="fileDropdown"></div>
+            </div>
+        </div>
+        
+        <div class="header-right">
+            <span class="uf-score-badge" id="uf-score">UF Score: 30</span>
+            <button class="settings-button" onclick="openAccountModal()">R</button>
+        </div>
+    </div>
+
+    <main class="main-content">
+        <section class="hero-section">
+            <img src="/attached_assets/ChatGPT%20Image%20Jul%2019%2C%202025%2C%2010_52_30%20AM_1752940360037.png" alt="NeuroLM Desktop" class="hero-logo">
+            <h1 class="hero-title">NeuroLM Desktop</h1>
+            <p class="hero-subtitle">
+                Run powerful AI models locally on your computer. Private, fast, and offline-capable personal AI assistants.
+            </p>
+        </section>
+
+        <section class="download-section">
+            <h2 class="download-title">Download for Your Platform</h2>
+            <p class="download-description">
+                Choose your operating system to download the NeuroLM Desktop app and start running AI models locally.
+            </p>
+            
+            <div class="download-buttons">
+                <button id="windows-btn" class="download-btn" onclick="downloadApp('windows')">
+                    <span class="download-icon">🪟</span>
+                    <div>
+                        <div>Windows</div>
+                        <small>64-bit Installer</small>
+                    </div>
+                </button>
+                
+                <button id="mac-btn" class="download-btn" onclick="downloadApp('mac')">
+                    <span class="download-icon">🍎</span>
+                    <div>
+                        <div>macOS</div>
+                        <small>Universal Binary</small>
+                    </div>
+                </button>
+                
+                <button id="linux-btn" class="download-btn" onclick="downloadApp('linux')">
+                    <span class="download-icon">🐧</span>
+                    <div>
+                        <div>Linux</div>
+                        <small>AppImage</small>
+                    </div>
+                </button>
+            </div>
+            
+            <p class="system-detected" id="system-detected"></p>
+        </section>
+
+        <section class="features-section">
+            <div class="feature-card">
+                <span class="feature-icon">🚀</span>
+                <h3 class="feature-title">Lightning Fast</h3>
+                <p class="feature-description">
+                    Run AI models directly on your hardware for instant responses without internet dependency.
+                </p>
+            </div>
+            
+            <div class="feature-card">
+                <span class="feature-icon">🔒</span>
+                <h3 class="feature-title">Complete Privacy</h3>
+                <p class="feature-description">
+                    Your conversations and data never leave your computer. True local processing for maximum privacy.
+                </p>
+            </div>
+            
+            <div class="feature-card">
+                <span class="feature-icon">📱</span>
+                <h3 class="feature-title">Works Offline</h3>
+                <p class="feature-description">
+                    Once models are downloaded, use them completely offline. No internet required for AI assistance.
+                </p>
+            </div>
+            
+            <div class="feature-card">
+                <span class="feature-icon">🧠</span>
+                <h3 class="feature-title">Multiple Models</h3>
+                <p class="feature-description">
+                    Choose from 6 specialized AI models: coding agents, reasoning assistants, creative writers, and more.
+                </p>
+            </div>
+            
+            <div class="feature-card">
+                <span class="feature-icon">⚙️</span>
+                <h3 class="feature-title">Easy Setup</h3>
+                <p class="feature-description">
+                    Simple installation with automatic hardware detection and model recommendations for your system.
+                </p>
+            </div>
+            
+            <div class="feature-card">
+                <span class="feature-icon">🔄</span>
+                <h3 class="feature-title">Auto Updates</h3>
+                <p class="feature-description">
+                    Seamless updates for both the app and AI models. Stay current with the latest capabilities.
+                </p>
+            </div>
+        </section>
+
+        <section class="requirements-section">
+            <h2 class="requirements-title">System Requirements</h2>
+            <div class="requirements-grid">
+                <div class="requirement-item">
+                    <div class="requirement-label">Minimum RAM</div>
+                    <div class="requirement-value">8GB (16GB recommended)</div>
+                </div>
+                <div class="requirement-item">
+                    <div class="requirement-label">Storage Space</div>
+                    <div class="requirement-value">50GB free space for models</div>
+                </div>
+                <div class="requirement-item">
+                    <div class="requirement-label">GPU (Optional)</div>
+                    <div class="requirement-value">NVIDIA/AMD for faster inference</div>
+                </div>
+                <div class="requirement-item">
+                    <div class="requirement-label">Operating System</div>
+                    <div class="requirement-value">Windows 10+, macOS 11+, Linux</div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <div class="footer-links">
+            <a href="/personal-models" class="footer-link">Personal Models</a>
+            <a href="/" class="footer-link">Chat</a>
+            <a href="/secrets" class="footer-link">Settings</a>
+        </div>
+        <p>&copy; 2025 NeuroLM. Advanced AI Memory System with Local Processing.</p>
+    </footer>
+
+    <script>
+        // Detect user's operating system and highlight recommended download
+        function detectOS() {
+            const userAgent = navigator.userAgent;
+            let detectedOS = 'unknown';
+            let displayName = 'Unknown System';
+            
+            if (userAgent.includes('Windows NT')) {
+                detectedOS = 'windows';
+                displayName = 'Windows';
+            } else if (userAgent.includes('Mac OS X') || userAgent.includes('Macintosh')) {
+                detectedOS = 'mac';
+                displayName = 'macOS';
+            } else if (userAgent.includes('Linux') && !userAgent.includes('Android')) {
+                detectedOS = 'linux';
+                displayName = 'Linux';
+            }
+            
+            // Highlight the recommended button
+            if (detectedOS !== 'unknown') {
+                const recommendedBtn = document.getElementById(detectedOS + '-btn');
+                if (recommendedBtn) {
+                    recommendedBtn.classList.add('recommended');
+                }
+                
+                // Show detection message
+                const systemDetected = document.getElementById('system-detected');
+                if (systemDetected) {
+                    systemDetected.textContent = `We detected you're using ${displayName}`;
+                }
+            }
+        }
+        
+        // Global state for download management
+        let currentDownload = null;
+        
+        // Handle download button clicks
+        async function downloadApp(platform) {
+            // Show "Coming Soon" message for Windows and macOS
+            if (platform === 'windows' || platform === 'mac') {
+                const platformName = platform === 'windows' ? 'Windows' : 'macOS';
+                alert(`NeuroLM Desktop for ${platformName}\n\nThe NeuroLM Desktop app provides:\n• Complete offline AI model support\n• Private, local processing - no data sent to servers\n• 6 specialized AI models for coding, writing, and reasoning\n• Professional installation with desktop shortcuts\n• Seamless integration with your NeuroLM account\n• Hardware optimization for best performance\n\nComing Soon - We're working on ${platformName} support!`);
+                return;
+            }
+            
+            const btn = document.getElementById(platform + '-btn');
+            const originalText = btn.innerHTML;
+            
+            // Cancel any existing download first
+            if (currentDownload && currentDownload !== platform) {
+                cancelDownload(currentDownload);
+            }
+            
+            // Set current download
+            currentDownload = platform;
+            
+            try {
+                btn.innerHTML = btn.innerHTML.replace('<small>', '<small><div class="download-progress"><span class="progress-text">Checking builds...</span><span class="cancel-btn" onclick="event.stopPropagation(); cancelDownload(\'' + platform + '\')">✕ CANCEL</span></div>');
+                btn.disabled = true;
+                btn.classList.add('downloading');
+                
+                // Disable other platform buttons during download
+                disableOtherPlatforms(platform);
+                
+                // Check build status
+                const response = await fetch('/api/desktop/build-status');
+                const buildStatus = await response.json();
+                
+                if (buildStatus.builds_available && buildStatus.downloads[platform]) {
+                    // Direct download available
+                    const downloadInfo = buildStatus.downloads[platform];
+                    const sizeInMB = (downloadInfo.size / (1024 * 1024)).toFixed(1);
+                    
+                    btn.innerHTML = btn.innerHTML.replace('<span class="progress-text">Checking builds...</span>', `<span class="progress-text">Starting ${sizeInMB}MB download...</span>`);
+                    
+                    // Give user 2 seconds to see the cancel button and potentially cancel
+                    let downloadTimeout = setTimeout(() => {
+                        if (currentDownload === platform) {
+                            // Start actual download
+                            btn.innerHTML = btn.innerHTML.replace(`<span class="progress-text">Starting ${sizeInMB}MB download...</span>`, `<span class="progress-text">Downloading ${sizeInMB}MB...</span>`);
+                            window.location.href = downloadInfo.url;
+                            
+                            // Clean up after download starts
+                            setTimeout(() => {
+                                if (currentDownload === platform) {
+                                    finishDownload(platform);
+                                }
+                            }, 2000);
+                        }
+                    }, 2000);
+                    
+                    // Store timeout ID for cancellation
+                    btn.dataset.downloadTimeout = downloadTimeout;
+                } else {
+                    // No build available, trigger build
+                    btn.innerHTML = btn.innerHTML.replace('<span class="progress-text">Checking builds...</span>', '<span class="progress-text">Starting build process...</span>');
+                    
+                    // Give user time to cancel before starting build
+                    let buildTimeout = setTimeout(async () => {
+                        if (currentDownload === platform) {
+                            btn.innerHTML = btn.innerHTML.replace('<span class="progress-text">Starting build process...</span>', '<span class="progress-text">Building installer...</span>');
+                            
+                            try {
+                                const buildResponse = await fetch('/api/desktop/build', { method: 'POST' });
+                                const buildResult = await buildResponse.json();
+                                
+                                if (buildResult.success) {
+                                    showBuildInProgress(platform);
+                                } else {
+                                    throw new Error(buildResult.error || 'Build failed');
+                                }
+                            } catch (error) {
+                                console.error('Build error:', error);
+                                showDownloadInfo(platform);
+                            } finally {
+                                finishDownload(platform);
+                            }
+                        }
+                    }, 2000);
+                    
+                    // Store timeout ID for cancellation
+                    btn.dataset.buildTimeout = buildTimeout;
+                }
+            } catch (error) {
+                console.error('Download error:', error);
+                showDownloadInfo(platform);
+                finishDownload(platform);
+            }
+        }
+        
+        // Cancel current download
+        function cancelDownload(platform) {
+            if (currentDownload !== platform) return;
+            
+            const btn = document.getElementById(platform + '-btn');
+            if (btn) {
+                // Clear any pending timeouts
+                if (btn.dataset.downloadTimeout) {
+                    clearTimeout(parseInt(btn.dataset.downloadTimeout));
+                    delete btn.dataset.downloadTimeout;
+                }
+                if (btn.dataset.buildTimeout) {
+                    clearTimeout(parseInt(btn.dataset.buildTimeout));
+                    delete btn.dataset.buildTimeout;
+                }
+                
+                // Reset to original state
+                btn.disabled = false;
+                btn.classList.remove('downloading');
+                
+                // Restore original button text
+                const iconElement = btn.querySelector('.download-icon');
+                const iconText = iconElement ? iconElement.textContent : (platform === 'windows' ? '🪟' : platform === 'mac' ? '🍎' : '🐧');
+                const platformName = platform === 'windows' ? 'Windows' : platform === 'mac' ? 'macOS' : 'Linux';
+                const subtitle = platform === 'windows' ? '64-bit Installer' : platform === 'mac' ? 'Universal Binary' : 'AppImage';
+                
+                btn.innerHTML = `
+                    <span class="download-icon">${iconText}</span>
+                    <div>
+                        <div>${platformName}</div>
+                        <small>${subtitle}</small>
+                    </div>
+                `;
+                
+                // Re-enable all buttons
+                enableAllPlatforms();
+                currentDownload = null;
+                
+                // Show cancellation feedback
+                console.log(`Download cancelled for ${platformName}`);
+            }
+        }
+        
+        // Finish download process
+        function finishDownload(platform) {
+            const btn = document.getElementById(platform + '-btn');
+            if (btn) {
+                btn.disabled = false;
+                btn.classList.remove('downloading');
+                
+                // Restore original button text  
+                const iconElement = btn.querySelector('.download-icon');
+                const iconText = iconElement ? iconElement.textContent : (platform === 'windows' ? '🪟' : platform === 'mac' ? '🍎' : '🐧');
+                const platformName = platform === 'windows' ? 'Windows' : platform === 'mac' ? 'macOS' : 'Linux';
+                const subtitle = platform === 'windows' ? '64-bit Installer' : platform === 'mac' ? 'Universal Binary' : 'AppImage';
+                
+                btn.innerHTML = `
+                    <span class="download-icon">${iconText}</span>
+                    <div>
+                        <div>${platformName}</div>
+                        <small>${subtitle}</small>
+                    </div>
+                `;
+            }
+            enableAllPlatforms();
+            currentDownload = null;
+        }
+        
+        // Disable other platform buttons during download
+        function disableOtherPlatforms(activePlatform) {
+            const platforms = ['windows', 'mac', 'linux'];
+            platforms.forEach(platform => {
+                if (platform !== activePlatform) {
+                    const btn = document.getElementById(platform + '-btn');
+                    if (btn) {
+                        btn.disabled = true;
+                        btn.style.opacity = '0.5';
+                    }
+                }
+            });
+        }
+        
+        // Re-enable all platform buttons
+        function enableAllPlatforms() {
+            const platforms = ['windows', 'mac', 'linux'];
+            platforms.forEach(platform => {
+                const btn = document.getElementById(platform + '-btn');
+                if (btn) {
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
+                }
+            });
+        }
+        
+        function showDownloadInfo(platform) {
+            const platformNames = {
+                'windows': 'Windows',
+                'mac': 'macOS', 
+                'linux': 'Linux'
+            };
+            
+            const message = `NeuroLM Desktop for ${platformNames[platform]} will be available soon!\n\n` +
+                          `Features included:\n` +
+                          `• Run AI models locally on your computer\n` +
+                          `• Complete privacy - data never leaves your device\n` +
+                          `• Works offline once models are downloaded\n` +
+                          `• 6 specialized AI models available\n` +
+                          `• WebSocket connection to your NeuroLM account\n\n` +
+                          `We're currently finalizing the build process and will notify you when downloads are ready.`;
+            
+            alert(message);
+        }
+        
+        function showBuildInProgress(platform) {
+            const platformNames = {
+                'windows': 'Windows',
+                'mac': 'macOS', 
+                'linux': 'Linux'
+            };
+            
+            const message = `Building NeuroLM Desktop for ${platformNames[platform]}!\n\n` +
+                          `The build process has started and typically takes 3-5 minutes.\n` +
+                          `We're creating a complete desktop application with:\n\n` +
+                          `• Embedded AI model management\n` +
+                          `• Local processing capabilities\n` +
+                          `• Cross-platform compatibility\n` +
+                          `• Secure WebSocket communication\n\n` +
+                          `Refresh this page in a few minutes to download your installer.`;
+            
+            alert(message);
+        }
+        
+        // Check build status on page load
+        async function checkBuildStatus() {
+            try {
+                const response = await fetch('/api/desktop/build-status');
+                const buildStatus = await response.json();
+                
+                if (buildStatus.builds_available) {
+                    // Update download buttons to show available builds
+                    Object.keys(buildStatus.downloads).forEach(platform => {
+                        const btn = document.getElementById(platform + '-btn');
+                        if (btn) {
+                            btn.classList.remove('coming-soon');
+                            const small = btn.querySelector('small');
+                            if (small) {
+                                const sizeInMB = (buildStatus.downloads[platform].size / (1024 * 1024)).toFixed(1);
+                                small.textContent = `Ready to download • ${sizeInMB}MB`;
+                            }
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to check build status:', error);
+            }
+        }
+        
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            detectOS();
+            checkBuildStatus();
+        });
+        
+        // Header functionality
+        function showWelcomeScreen() {
+            // Navigate back to main chat
+            window.location.href = '/';
+        }
+        
+        function openAccountModal() {
+            // Navigate to settings/secrets page
+            window.location.href = '/secrets';
+        }
+        
+        // Sidebar toggle (placeholder for consistency)
+        document.addEventListener('DOMContentLoaded', function() {
+            const sidebarToggle = document.getElementById('sidebarToggle');
+            if (sidebarToggle) {
+                sidebarToggle.addEventListener('click', function() {
+                    // On this page, just navigate to main chat where sidebar works
+                    window.location.href = '/';
+                });
+            }
+        });
+    </script>
+</body>
+</html>

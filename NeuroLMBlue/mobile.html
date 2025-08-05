@@ -1,0 +1,1598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeuroLM Mobile</title>
+    <link rel="manifest" href="/manifest.json">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        body {
+            background: #000000;
+            color: #ffffff;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Header */
+        .header {
+            background: #000000;
+            padding: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid #2a2a2a;
+        }
+
+        .menu-button {
+            background: none;
+            border: none;
+            color: #ffffff;
+            font-size: 1.5rem;
+            cursor: pointer;
+        }
+
+
+
+        .header h1 {
+            font-size: 1.2rem;
+            font-weight: 600;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        /* Sidebar */
+        .sidebar-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 998;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .sidebar-overlay.show {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .sidebar {
+            position: fixed;
+            top: 0;
+            left: -320px;
+            width: 320px;
+            height: 100vh;
+            background: #000000;
+            z-index: 999;
+            transition: left 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #2a2a2a;
+        }
+
+        .sidebar.open {
+            left: 0;
+        }
+
+        .sidebar-header {
+            padding: 1rem;
+            border-bottom: 1px solid #2a2a2a;
+        }
+
+        .topic-selection {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .topic-selection label {
+            font-size: 0.9rem;
+            color: #ffffff;
+            font-weight: 500;
+        }
+
+        .topic-select, .subtopic-select {
+            background: #2a2a2a;
+            border: 1px solid #404040;
+            color: #ffffff;
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+            font-size: 0.9rem;
+        }
+
+        .model-selector {
+            margin-bottom: 1rem;
+        }
+
+        .model-selector label {
+            font-size: 0.9rem;
+            color: #ffffff;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+            display: block;
+        }
+
+        .model-select {
+            background: #2a2a2a;
+            border: 1px solid #404040;
+            color: #ffffff;
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+            font-size: 0.9rem;
+            width: 100%;
+        }
+
+        .new-chat-btn {
+            background: #4f46e5;
+            color: #ffffff;
+            border: none;
+            padding: 0.75rem 1rem;
+            border-radius: 0.5rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+
+        .new-chat-btn:hover {
+            background: #4338ca;
+        }
+
+        .conversations-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+        }
+
+        .conversation-item {
+            background: #1a1a1a;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+
+        .conversation-item:hover {
+            background: #2a2a2a;
+        }
+
+        .conversation-item.active {
+            background: #4f46e5;
+        }
+
+        .conversation-title {
+            font-weight: 600;
+            font-size: 1rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .conversation-topic {
+            font-size: 0.8rem;
+            color: #9ca3af;
+            margin-bottom: 0.25rem;
+        }
+
+        .conversation-preview {
+            font-size: 0.9rem;
+            color: #d1d5db;
+            line-height: 1.4;
+        }
+
+        .conversation-meta {
+            font-size: 0.8rem;
+            color: #9ca3af;
+            margin-top: 0.25rem;
+        }
+
+        /* Main Chat Area */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .welcome-screen {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 2rem;
+        }
+
+        .logo {
+            width: 360px;
+            height: 240px;
+            margin-bottom: 2rem;
+        }
+
+        .welcome-text h2 {
+            font-size: 1.8rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .welcome-text p {
+            font-size: 1.2rem;
+            color: #9ca3af;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+            display: none;
+        }
+
+        .message {
+            margin-bottom: 1rem;
+            padding: 1rem;
+            border-radius: 1rem;
+            max-width: 85%;
+            word-wrap: break-word;
+        }
+
+        .user-message {
+            background: #4f46e5;
+            color: #ffffff;
+            margin-left: auto;
+        }
+
+        .assistant-message {
+            background: #2a2a2a;
+            color: #ffffff;
+            margin-right: auto;
+        }
+
+        /* Input Area */
+        .input-area {
+            padding: 1rem;
+            padding-bottom: 4rem;
+            border-top: 1px solid #2a2a2a;
+            background: #000000;
+        }
+
+        .input-container {
+            position: relative;
+            display: flex;
+            align-items: end;
+            gap: 0.5rem;
+        }
+
+        .input-left {
+            position: relative;
+        }
+
+        /* Message Action Buttons */
+        .message-actions {
+            display: flex;
+            gap: 0.5rem;
+            justify-content: flex-end;
+            margin-top: 0.5rem;
+            align-items: center;
+        }
+
+        .action-button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 0.4rem;
+            border-radius: 6px;
+            transition: background-color 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .action-button:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .action-button svg {
+            width: 16px;
+            height: 16px;
+            fill: #9ca3af;
+            transition: fill 0.2s ease;
+        }
+
+        .action-button:hover svg {
+            fill: #ffffff;
+        }
+
+        .copy-button:hover svg {
+            fill: #10b981;
+        }
+
+        .like-button:hover svg {
+            fill: #10b981;
+        }
+
+        .like-button.active svg {
+            fill: #10b981;
+        }
+
+        .dislike-button:hover svg {
+            fill: #ef4444;
+        }
+
+        .dislike-button.active svg {
+            fill: #ef4444;
+        }
+
+        /* New feedback pill buttons */
+        .feedback-buttons {
+            display: flex;
+            gap: 6px;
+            margin-top: 4px;
+            flex-wrap: wrap;
+        }
+
+        .feedback-pill {
+            background: #f3f4f6;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 4px 8px;
+            font-size: 0.7rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: #6b7280;
+            text-decoration: none;
+        }
+
+        .feedback-pill:hover {
+            background: #e5e7eb;
+            color: #374151;
+        }
+
+        .feedback-pill.active {
+            background: #dbeafe;
+            border-color: #3b82f6;
+            color: #1d4ed8;
+        }
+
+        .feedback-pill.great-response.active {
+            background: #dcfce7;
+            border-color: #16a34a;
+            color: #166534;
+        }
+
+        .feedback-pill.that-worked.active {
+            background: #fef3c7;
+            border-color: #d97706;
+            color: #92400e;
+        }
+
+        .feedback-pill.not-helpful.active {
+            background: #fee2e2;
+            border-color: #dc2626;
+            color: #991b1b;
+        }
+
+        .uf-score-badge {
+            background: linear-gradient(45deg, #3b82f6, #1d4ed8);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: bold;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            margin-left: 8px;
+        }
+
+        .uf-score-badge .score-label {
+            opacity: 0.9;
+        }
+
+        .uf-score-badge .score-value {
+            font-size: 0.8rem;
+        }
+
+        .message-input {
+            flex: 1;
+            background: #2a2a2a;
+            border: 1px solid #404040;
+            color: #ffffff;
+            padding: 1rem;
+            border-radius: 1.5rem;
+            font-size: 1rem;
+            resize: none;
+            min-height: 48px;
+            max-height: 120px;
+        }
+
+        .message-input::placeholder {
+            color: #9ca3af;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 0.5rem;
+            position: relative;
+        }
+
+        .action-btn {
+            background: #2a2a2a;
+            border: 1px solid #404040;
+            color: #ffffff;
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 1.2rem;
+        }
+
+        .action-btn:hover {
+            background: #404040;
+        }
+
+        .send-btn {
+            background: #4f46e5;
+        }
+
+        .send-btn:hover {
+            background: #4338ca;
+        }
+
+        /* Plus menu styles */
+        .plus-menu {
+            position: absolute;
+            bottom: 60px;
+            left: 0;
+            background: #2a2a2a;
+            border: 1px solid #404040;
+            border-radius: 0.75rem;
+            padding: 0.5rem;
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(10px);
+            transition: all 0.2s ease;
+            z-index: 10;
+            min-width: 140px;
+        }
+
+        .plus-menu.show {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+
+        .plus-menu-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem;
+            color: #ffffff;
+            cursor: pointer;
+            border-radius: 0.5rem;
+            transition: background 0.2s ease;
+            white-space: nowrap;
+            font-size: 0.9rem;
+        }
+
+        .plus-menu-item:hover {
+            background: #404040;
+        }
+
+        .plus-menu-item.active {
+            background: #4f46e5;
+        }
+
+        .plus-menu-item span {
+            font-size: 1.1rem;
+        }
+
+        /* Typing indicator */
+        .typing-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 1rem;
+        }
+
+        .typing-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #9ca3af;
+            animation: typing 1.4s infinite ease-in-out;
+        }
+
+        .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+
+        @keyframes typing {
+            0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 480px) {
+            .sidebar {
+                width: 100vw;
+                left: -100vw;
+            }
+
+            .header h1 {
+                font-size: 1rem;
+            }
+
+            .welcome-text h2 {
+                font-size: 1.5rem;
+            }
+
+            .welcome-text p {
+                font-size: 1rem;
+            }
+        }
+
+        /* Code styling for mobile */
+        pre {
+            background: #1a1a1a;
+            border: 1px solid #404040;
+            border-radius: 6px;
+            padding: 2.5rem 1rem 1rem 1rem;
+            overflow-x: auto;
+            margin: 1rem 0;
+            position: relative;
+            color: #e5e7eb;
+        }
+
+        code {
+            background: #2a2a2a;
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            color: #e5e7eb;
+        }
+
+        pre code {
+            background: none;
+            padding: 0;
+            color: #e5e7eb;
+        }
+
+        .code-copy-button {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            border: none;
+            padding: 0.3rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            z-index: 10;
+        }
+
+        .code-copy-button:hover {
+            background: rgba(0,0,0,0.9);
+        }
+
+        .code-language-indicator {
+            position: absolute;
+            top: 0.5rem;
+            left: 0.5rem;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            border: none;
+            padding: 0.3rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            z-index: 10;
+            font-family: 'Courier New', monospace;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <button class="menu-button" onclick="toggleSidebar()">☰</button>
+        <h1 onclick="showWelcomeScreen()" style="cursor: pointer;">NeuroLM</h1>
+        <div class="header-right">
+            <span id="userName">User</span>
+            <div class="uf-score-badge" id="ufScoreBadge">
+                <span class="score-label">UF:</span>
+                <span class="score-value" id="ufScoreValue">0</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <div class="model-selector">
+                <label for="modelSelect">Model:</label>
+                <select class="model-select" id="modelSelect">
+                    <option value="openai/gpt-4o-mini">Loading models...</option>
+                </select>
+            </div>
+
+            <div class="topic-selection">
+                <label for="topicSelect">Topic:</label>
+                <select class="topic-select" id="topicSelect">
+                    <option value="">All Topics</option>
+                    <option value="__new__">+ Create New Topic</option>
+                </select>
+
+                <label for="subtopicSelect">Sub-topic:</label>
+                <select class="subtopic-select" id="subtopicSelect" disabled>
+                    <option value="">All Sub-topics</option>
+                    <option value="__new__">+ Create New Sub-topic</option>
+                </select>
+            </div>
+            <button class="new-chat-btn" id="newChatBtn">+ Start New Chat</button>
+        </div>
+        <div class="conversations-list" id="conversationsList">
+            <!-- Conversations will be loaded here -->
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <!-- Welcome Screen -->
+        <div class="welcome-screen" id="welcomeScreen">
+            <img class="logo" src="/static/neural-brain-logo.png" alt="NeuroLM Neural Brain Logo" />
+            <div class="welcome-text">
+                <h2>Welcome Back</h2>
+                <p id="welcomeUserName">User</p>
+            </div>
+        </div>
+
+        <!-- Chat Messages -->
+        <div class="chat-messages" id="chatMessages">
+            <!-- Messages will appear here -->
+        </div>
+    </div>
+
+    <!-- Input Area -->
+    <div class="input-area">
+        <div class="input-container">
+            <div class="input-left">
+                <button class="action-btn" id="plusBtn" title="Options">+</button>
+                <div class="plus-menu" id="plusMenu">
+                    <div class="plus-menu-item" id="fileMenuItem">
+                        <span>📎</span>
+                        Upload File
+                    </div>
+                    <div class="plus-menu-item" id="webSearchMenuItem">
+                        <span>🌐</span>
+                        Web Search
+                    </div>
+                </div>
+            </div>
+            <textarea 
+                class="message-input" 
+                id="messageInput" 
+                placeholder="How can I help you today?"
+                rows="1"
+            ></textarea>
+            <button class="action-btn send-btn" id="sendBtn" onclick="sendMessage()">➤</button>
+        </div>
+        <input type="file" id="fileInput" style="display: none;">
+    </div>
+
+    <script>
+        // Global variables
+        let currentConversationId = null;
+        let selectedTopic = '';
+        let selectedSubtopic = '';
+        let webSearchEnabled = false;
+        let conversations = [];
+        let currentOffset = 0;
+        let hasMoreConversations = true;
+        let isLoadingConversations = false;
+
+        // Load models
+        async function loadModels() {
+            try {
+                const response = await fetch('/api/models');
+                const models = await response.json();
+
+                const modelSelect = document.getElementById('modelSelect');
+                modelSelect.innerHTML = '';
+
+                models.forEach(model => {
+                    const option = document.createElement('option');
+                    option.value = model.id;
+                    option.textContent = model.name || model.id;
+                    modelSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading models:', error);
+                const modelSelect = document.getElementById('modelSelect');
+                modelSelect.innerHTML = '<option value="openai/gpt-4o-mini">GPT-4o Mini (fallback)</option>';
+            }
+        }
+
+        // Initialize app
+        document.addEventListener('DOMContentLoaded', async function() {
+            await loadUserName();
+            await loadModels();
+            await loadTopics();
+            await loadConversations();
+            setupEventListeners();
+            setupTouchGestures();
+
+            // PWA Service Worker
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.register('/sw.js')
+                    .then(reg => console.log('SW registered'))
+                    .catch(err => console.log('SW registration failed'));
+            }
+        });
+
+        // Load user name
+        async function loadUserName() {
+            try {
+                const response = await fetch('/api/user/name');
+                const data = await response.json();
+                document.getElementById('userName').textContent = data.first_name || 'User';
+                document.getElementById('welcomeUserName').textContent = data.first_name || 'User';
+
+                // Update UF Score badge
+                const ufScoreValue = document.getElementById('ufScoreValue');
+                if (ufScoreValue && data.feedback_score !== undefined) {
+                    ufScoreValue.textContent = data.feedback_score;
+                }
+            } catch (error) {
+                console.error('Error loading user name:', error);
+            }
+        }
+
+        // Load topics (copied from desktop)
+        async function loadTopics() {
+            try {
+                const response = await fetch('/api/topics');
+                const allTopics = await response.json();
+
+                const topicSelect = document.getElementById('topicSelect');
+                topicSelect.innerHTML = '<option value="">All Topics</option><option value="__new__">+ Create New Topic</option>';
+
+                Object.keys(allTopics).forEach(topic => {
+                    const option = document.createElement('option');
+                    option.value = topic;
+                    option.textContent = topic;
+                    topicSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading topics:', error);
+            }
+        }
+
+        // Load conversations
+        async function loadConversations(reset = false) {
+            if (isLoadingConversations || (!hasMoreConversations && !reset)) return;
+
+            isLoadingConversations = true;
+
+            if (reset) {
+                currentOffset = 0;
+                hasMoreConversations = true;
+                conversations = [];
+            }
+
+            try {
+                let url = `/api/conversations?limit=20&offset=${currentOffset}`;
+
+                if (selectedTopic && selectedTopic !== '__new__') {
+                    url += `&topic=${encodeURIComponent(selectedTopic)}`;
+                }
+
+                if (selectedSubtopic && selectedSubtopic !== '__new__') {
+                    url += `&sub_topic=${encodeURIComponent(selectedSubtopic)}`;
+                }
+
+                const response = await fetch(url);
+                const data = await response.json();
+
+                const conversationsList = document.getElementById('conversationsList');
+
+                if (reset) {
+                    conversationsList.innerHTML = '';
+                }
+
+                if (data.conversations && data.conversations.length > 0) {
+                    data.conversations.forEach(conv => {
+                        const item = createConversationItem(conv);
+                        conversationsList.appendChild(item);
+                    });
+
+                    conversations = conversations.concat(data.conversations);
+                    currentOffset += data.conversations.length;
+                    hasMoreConversations = data.has_more;
+                } else if (reset) {
+                    conversationsList.innerHTML = '<div style="padding: 1rem; text-align: center; color: #9ca3af;">No conversations found</div>';
+                }
+
+            } catch (error) {
+                console.error('Error loading conversations:', error);
+            } finally {
+                isLoadingConversations = false;
+            }
+        }
+
+        // Create conversation item
+        function createConversationItem(conv) {
+            const item = document.createElement('div');
+            item.className = 'conversation-item';
+            item.onclick = () => selectConversation(conv.id);
+
+            let topicDisplay = '';
+            if (conv.topic) {
+                topicDisplay = `<div class="conversation-topic">${conv.topic}${conv.sub_topic ? ' > ' + conv.sub_topic : ''}</div>`;
+            }
+
+            let previewDisplay = '';
+            if (conv.last_message) {
+                previewDisplay = `<div class="conversation-preview">${conv.last_message.substring(0, 80)}...</div>`;
+            }
+
+            item.innerHTML = `
+                <div class="conversation-title">${conv.title}</div>
+                ${topicDisplay}
+                ${previewDisplay}
+                <div class="conversation-meta">${new Date(conv.updated_at).toLocaleDateString()}</div>
+            `;
+
+            return item;
+        }
+
+        // Select conversation
+        async function selectConversation(conversationId) {
+            currentConversationId = conversationId;
+
+            // Update UI
+            document.querySelectorAll('.conversation-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            event.currentTarget.classList.add('active');
+
+            // Load messages
+            await loadMessages(conversationId);
+
+            // Show chat area
+            document.getElementById('welcomeScreen').style.display = 'none';
+            document.getElementById('chatMessages').style.display = 'block';
+
+            closeSidebar();
+        }
+
+        // Load messages
+        async function loadMessages(conversationId) {
+            try {
+                const response = await fetch(`/api/conversations/${conversationId}/messages`);
+                const data = await response.json();
+
+                const chatMessages = document.getElementById('chatMessages');
+                chatMessages.innerHTML = '';
+
+                if (data.messages && data.messages.length > 0) {
+                    data.messages.forEach(msg => {
+                        addMessageToUI(msg.content, msg.message_type, msg.id);
+                    });
+                }
+
+                scrollToBottom();
+            } catch (error) {
+                console.error('Error loading messages:', error);
+            }
+        }
+
+        // Add message to UI
+        function addMessageToUI(content, type, messageId) {
+            const chatMessages = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type === 'user' ? 'user-message' : 'assistant-message'}`;
+
+            // Generate message ID if not provided
+            if (!messageId) {
+                messageId = 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            }
+            messageDiv.id = messageId;
+
+            if (type === 'assistant') {
+                messageDiv.innerHTML = marked.parse(content);
+
+                // Add code copy buttons and language indicators
+                addCodeCopyButtons(messageDiv);
+
+                // Add action buttons for assistant messages
+                const actionsDiv = document.createElement('div');
+                actionsDiv.className = 'message-actions';
+                actionsDiv.innerHTML = `
+                    <button class="action-button copy-button" onclick="copyToClipboard('${messageId}', this)" title="Copy message">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+                        </svg>
+                    </button>
+                    <div class="feedback-buttons">
+                        <button class="feedback-pill great-response" onclick="submitFeedback('${messageId}', 'great_response', this)" title="Great response">Great response</button>
+                        ${content.includes('```') ? '<button class="feedback-pill that-worked" onclick="submitFeedback(\'' + messageId + '\', \'that_worked\', this)" title="That worked">That worked</button>' : ''}
+                        <button class="feedback-pill not-helpful" onclick="submitFeedback('${messageId}', 'not_helpful', this)" title="Not helpful at all">Not helpful</button>
+                    </div>
+                `;
+                messageDiv.appendChild(actionsDiv);
+
+                // Apply localStorage feedback state to pill buttons
+                const feedbackKey = `feedback_${messageId}`;
+                const currentFeedback = localStorage.getItem(feedbackKey);
+                if (currentFeedback) {
+                    // Map feedback types to button classes
+                    const feedbackClasses = {
+                        'great_response': '.great-response',
+                        'that_worked': '.that-worked',
+                        'not_helpful': '.not-helpful',
+                        'like': '.great-response',      // Legacy mapping
+                        'dislike': '.not-helpful'       // Legacy mapping
+                    };
+
+                    const buttonClass = feedbackClasses[currentFeedback];
+                    if (buttonClass) {
+                        const button = messageDiv.querySelector(buttonClass);
+                        if (button) button.classList.add('active');
+                    }
+                }
+            } else {
+                messageDiv.textContent = content;
+            }
+
+            chatMessages.appendChild(messageDiv);
+            scrollToBottom();
+        }
+
+        // Copy message to clipboard
+        async function copyToClipboard(messageId, button) {
+            const messageElement = document.getElementById(messageId);
+            if (messageElement) {
+                // Clone the message element to avoid modifying the original
+                const clone = messageElement.cloneNode(true);
+
+                // Remove elements we don't want to copy
+                const messageActions = clone.querySelector('.message-actions');
+                if (messageActions) messageActions.remove();
+
+                // Get the remaining text content
+                const messageContent = clone.textContent.trim();
+
+                navigator.clipboard.writeText(messageContent).then(() => {
+                    const originalTitle = button.title;
+                    button.title = 'Copied!';
+                    button.style.opacity = '0.7';
+                    setTimeout(() => {
+                        button.title = originalTitle;
+                        button.style.opacity = '1';
+                    }, 2000);
+
+                    // Send positive feedback to RIAI system for copy action
+                    sendImplicitFeedback(messageId, 'copy', 0.3);
+
+                }).catch(err => {
+                    console.error('Failed to copy: ', err);
+                });
+            }
+        }
+
+        // Send implicit feedback to RIAI system
+        async function sendImplicitFeedback(messageId, actionType, score) {
+            try {
+                const response = await fetch('/api/feedback-implicit', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message_id: messageId,
+                        action_type: actionType,
+                        feedback_score: score
+                    })
+                });
+
+                if (response.ok) {
+                    console.log(`RIAI implicit feedback recorded: ${actionType} = ${score}`);
+                } else {
+                    console.log('Implicit feedback submission failed silently');
+                }
+            } catch (error) {
+                console.log('Implicit feedback error (continuing silently):', error);
+            }
+        }
+
+        // Submit feedback using pill buttons
+        async function submitFeedback(messageId, feedbackType, buttonElement) {
+            const feedbackButtons = buttonElement.parentElement;
+            const feedbackKey = `feedback_${messageId}`;
+            const currentFeedback = localStorage.getItem(feedbackKey);
+
+            if (currentFeedback === feedbackType) {
+                // Remove feedback (toggle off)
+                localStorage.removeItem(feedbackKey);
+                feedbackButtons.querySelectorAll('.feedback-pill').forEach(btn => btn.classList.remove('active'));
+            } else {
+                // Set new feedback
+                localStorage.setItem(feedbackKey, feedbackType);
+
+                // Clear all active states, then activate the clicked button
+                feedbackButtons.querySelectorAll('.feedback-pill').forEach(btn => btn.classList.remove('active'));
+                buttonElement.classList.add('active');
+
+                // Send feedback to backend for RIAI H(t) function
+                try {
+                    const response = await fetch('/api/feedback', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            message_id: messageId,
+                            feedback_type: feedbackType
+                        })
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        console.log(`RIAI feedback recorded: ${data.h_t_score}`);
+
+                        // Refresh UF Score after successful feedback submission
+                        await loadUserName();
+                    } else {
+                        console.error('Failed to submit feedback to RIAI system');
+                    }
+                } catch (error) {
+                    console.error('Error submitting feedback:', error);
+                }
+            }
+        }
+
+        // Add code copy buttons and language indicators
+        function addCodeCopyButtons(container) {
+            const codeBlocks = container.querySelectorAll('pre');
+            codeBlocks.forEach((pre) => {
+                // Add copy button
+                const button = document.createElement('button');
+                button.className = 'code-copy-button';
+                button.textContent = 'Copy';
+                button.onclick = () => copyCodeBlock(pre, button);
+                pre.style.position = 'relative';
+                pre.appendChild(button);
+
+                // Add language indicator
+                const code = pre.querySelector('code');
+                if (code) {
+                    const language = detectLanguage(code);
+                    if (language) {
+                        const languageIndicator = document.createElement('div');
+                        languageIndicator.className = 'code-language-indicator';
+                        languageIndicator.textContent = language;
+                        pre.appendChild(languageIndicator);
+                    }
+                }
+            });
+        }
+
+        function detectLanguage(codeElement) {
+            // Try to detect language from class names (markdown syntax highlighting)
+            const classList = codeElement.classList;
+            for (let className of classList) {
+                if (className.startsWith('language-')) {
+                    return className.replace('language-', '');
+                }
+                if (className.startsWith('hljs-')) {
+                    return className.replace('hljs-', '');
+                }
+            }
+
+            // Simple heuristic-based detection
+            const code = codeElement.textContent;
+            if (code.includes('def ') || code.includes('import ') || code.includes('print(')) {
+                return 'python';
+            }
+            if (code.includes('function ') || code.includes('const ') || code.includes('let ')) {
+                return 'javascript';
+            }
+            if (code.includes('<!DOCTYPE') || code.includes('<html>')) {
+                return 'html';
+            }
+            if (code.includes('{') && code.includes('}') && (code.includes('"') || code.includes("'"))) {
+                return 'json';
+            }
+            if (code.includes('SELECT') || code.includes('FROM') || code.includes('WHERE')) {
+                return 'sql';
+            }
+            if (code.includes('#include') || code.includes('int main')) {
+                return 'cpp';
+            }
+            if (code.includes('public class') || code.includes('System.out')) {
+                return 'java';
+            }
+            if (code.includes('<?php') || code.includes('echo ')) {
+                return 'php';
+            }
+
+            return null; // Unknown language
+        }
+
+        function copyCodeBlock(codeElement, button) {
+            const code = codeElement.querySelector('code');
+            const text = code ? code.textContent : codeElement.textContent;
+
+            navigator.clipboard.writeText(text).then(() => {
+                button.textContent = 'Copied!';
+                setTimeout(() => {
+                    button.textContent = 'Copy';
+                }, 2000);
+            }).catch(err => {
+                console.error('Failed to copy: ', err);
+            });
+        }
+
+        // Send message
+        async function sendMessage() {
+            const messageInput = document.getElementById('messageInput');
+            const message = messageInput.value.trim();
+
+            if (!message) return;
+
+            // Add user message to UI
+            addMessageToUI(message, 'user');
+            messageInput.value = '';
+            messageInput.style.height = '48px'; // Reset to minimum height
+
+            // Show typing indicator
+            showTypingIndicator();
+
+            // Show chat area if not visible
+            document.getElementById('welcomeScreen').style.display = 'none';
+            document.getElementById('chatMessages').style.display = 'block';
+
+            try {
+                const modelSelect = document.getElementById('modelSelect');
+                const selectedModel = modelSelect.value || 'openai/gpt-4o-mini';
+
+                const requestBody = {
+                    message: message,
+                    model: selectedModel,
+                    conversation_id: currentConversationId,
+                    web_search: webSearchEnabled
+                };
+
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
+
+                const data = await response.json();
+
+                // Remove typing indicator
+                removeTypingIndicator();
+
+                // Add AI response using PostgreSQL message ID
+                addMessageToUI(data.response, 'assistant', data.assistant_message_id);
+
+                // Update conversation ID
+                if (data.conversation_id) {
+                    currentConversationId = data.conversation_id;
+                    // Reload conversations to show new/updated conversation
+                    await loadConversations(true);
+                }
+
+            } catch (error) {
+                console.error('Error sending message:', error);
+                removeTypingIndicator();
+                addMessageToUI('Sorry, there was an error processing your message.', 'assistant');
+            }
+        }
+
+        // Show typing indicator
+        function showTypingIndicator() {
+            const chatMessages = document.getElementById('chatMessages');
+            const typingDiv = document.createElement('div');
+            typingDiv.className = 'message assistant-message typing-indicator';
+            typingDiv.id = 'typingIndicator';
+            typingDiv.innerHTML = '<div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>';
+
+            chatMessages.appendChild(typingDiv);
+            scrollToBottom();
+        }
+
+        // Remove typing indicator
+        function removeTypingIndicator() {
+            const typingIndicator = document.getElementById('typingIndicator');
+            if (typingIndicator) {
+                typingIndicator.remove();
+            }
+        }
+
+        // Scroll to bottom
+        function scrollToBottom() {
+            const chatMessages = document.getElementById('chatMessages');
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // Touch gesture variables
+        let touchStartX = 0;
+        let touchCurrentX = 0;
+        let touchStartY = 0;
+        let isDragging = false;
+        let isVerticalScroll = false;
+
+        // Sidebar functions with proper state cleanup
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+
+            if (sidebar.classList.contains('open')) {
+                closeSidebar();
+            } else {
+                openSidebar();
+            }
+        }
+
+        function closeSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+
+            // Ensure clean state
+            resetSidebarTransforms();
+
+            sidebar.classList.remove('open');
+            overlay.classList.remove('show');
+        }
+
+        function openSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+
+            // Ensure clean state
+            resetSidebarTransforms();
+
+            sidebar.classList.add('open');
+            overlay.classList.add('show');
+        }
+
+        function resetSidebarTransforms() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+
+            // Clear any transforms and ensure proper transition
+            sidebar.style.transform = '';
+            sidebar.style.transition = '';
+            overlay.style.opacity = '';
+            overlay.style.visibility = '';
+        }
+
+        // Touch gesture handlers
+        function handleTouchStart(e) {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+            touchCurrentX = touchStartX;
+            isDragging = false;
+            isVerticalScroll = false;
+        }
+
+        function handleTouchMove(e) {
+            if (e.touches.length !== 1) return;
+
+            touchCurrentX = e.touches[0].clientX;
+            const touchCurrentY = e.touches[0].clientY;
+            const deltaX = touchCurrentX - touchStartX;
+            const deltaY = touchCurrentY - touchStartY;
+
+            // Determine if this is a vertical scroll gesture
+            if (!isDragging && !isVerticalScroll) {
+                if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > 10) {
+                    isVerticalScroll = true;
+                    return;
+                } else if (Math.abs(deltaX) > 10) {
+                    isDragging = true;
+                }
+            }
+
+            if (isVerticalScroll) return;
+
+            // Only allow swipe from left edge or when sidebar is open
+            const isFromLeftEdge = touchStartX < 50;
+            const isSidebarOpen = document.getElementById('sidebar').classList.contains('open');
+
+            if (!isFromLeftEdge && !isSidebarOpen) return;
+
+            if (isDragging) {
+                e.preventDefault();
+
+                const sidebar = document.getElementById('sidebar');
+                const overlay = document.getElementById('sidebarOverlay');
+
+                // Calculate position based on current sidebar state
+                const currentPosition = isSidebarOpen ? 0 : -320;
+                let newX = currentPosition + deltaX;
+                newX = Math.max(-320, Math.min(0, newX));
+
+                // Apply transform during drag
+                sidebar.style.transition = 'none';
+                sidebar.style.transform = `translateX(${newX + 320}px)`;
+
+                // Update overlay
+                const opacity = Math.max(0, Math.min(1, (newX + 320) / 320));
+                overlay.style.transition = 'none';
+                overlay.style.opacity = opacity;
+                overlay.style.visibility = opacity > 0 ? 'visible' : 'hidden';
+            }
+        }
+
+        function handleTouchEnd(e) {
+            if (!isDragging) {
+                // Clean up any partial state
+                resetSidebarTransforms();
+                isDragging = false;
+                isVerticalScroll = false;
+                return;
+            }
+
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+            const deltaX = touchCurrentX - touchStartX;
+            const isSidebarOpen = sidebar.classList.contains('open');
+
+            // Determine final state
+            const threshold = 80;
+            let shouldOpen;
+
+            if (isSidebarOpen) {
+                // Sidebar is open, check if we should close it
+                shouldOpen = deltaX > -threshold;
+            } else {
+                // Sidebar is closed, check if we should open it
+                shouldOpen = deltaX > threshold;
+            }
+
+            // Reset transforms and apply final state
+            resetSidebarTransforms();
+
+            if (shouldOpen) {
+                openSidebar();
+            } else {
+                closeSidebar();
+            }
+
+            // Clean up state
+            isDragging = false;
+            isVerticalScroll = false;
+        }
+
+        // Setup touch gesture listeners
+        function setupTouchGestures() {
+            document.addEventListener('touchstart', handleTouchStart, { passive: false });
+            document.addEventListener('touchmove', handleTouchMove, { passive: false });
+            document.addEventListener('touchend', handleTouchEnd, { passive: false });
+        }
+
+        function showWelcomeScreen() {
+            // Hide chat messages and show welcome screen
+            document.getElementById('chatMessages').style.display = 'none';
+            document.getElementById('welcomeScreen').style.display = 'block';
+
+            // Clear current conversation
+            currentConversationId = null;
+
+            // Remove active state from all conversation items
+            document.querySelectorAll('.conversation-item').forEach(item => {
+                item.classList.remove('active');
+            });
+
+            // Close sidebar if open
+            closeSidebar();
+        }
+
+        // Setup event listeners
+        function setupEventListeners() {
+            const messageInput = document.getElementById('messageInput');
+            const plusBtn = document.getElementById('plusBtn');
+            const plusMenu = document.getElementById('plusMenu');
+            const fileMenuItem = document.getElementById('fileMenuItem');
+            const webSearchMenuItem = document.getElementById('webSearchMenuItem');
+            const fileInput = document.getElementById('fileInput');
+
+            // Auto-resize textarea
+            messageInput.addEventListener('input', function() {
+                this.style.height = 'auto';
+                this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+            });
+
+            // Send on Enter
+            messageInput.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                }
+            });
+
+            // Plus button toggle
+            plusBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                plusMenu.classList.toggle('show');
+            });
+
+            // Close menu when clicking outside
+            document.addEventListener('click', () => {
+                plusMenu.classList.remove('show');
+            });
+
+            // Prevent menu from closing when clicking inside
+            plusMenu.addEventListener('click', (e) => {
+                e.stopPropagation();
+            });
+
+            // File upload
+            fileMenuItem.addEventListener('click', () => {
+                fileInput.click();
+                plusMenu.classList.remove('show');
+            });
+
+            // Web search toggle
+            webSearchMenuItem.addEventListener('click', () => {
+                webSearchEnabled = !webSearchEnabled;
+                webSearchMenuItem.classList.toggle('active', webSearchEnabled);
+                plusMenu.classList.remove('show');
+            });
+
+            // Topic selection (copied from desktop)
+            document.getElementById('topicSelect').addEventListener('change', async function() {
+                selectedTopic = this.value;
+
+                const subtopicSelect = document.getElementById('subtopicSelect');
+                subtopicSelect.innerHTML = '<option value="">All Sub-topics</option>';
+                subtopicSelect.disabled = true;
+
+                if (selectedTopic === '__new__') {
+                    const newTopic = prompt('Enter new topic name:');
+                    if (newTopic && newTopic.trim()) {
+                        const success = await createTopicNow(newTopic);
+                        if (success) {
+                            selectedTopic = newTopic.toLowerCase().trim();
+                            this.value = selectedTopic;
+                            await loadTopics();
+                        } else {
+                            selectedTopic = '';
+                            this.value = '';
+                        }
+                    } else {
+                        selectedTopic = '';
+                        this.value = '';
+                    }
+                } else if (selectedTopic) {
+                    // Load sub-topics for selected topic
+                    await loadSubtopics(selectedTopic);
+                    subtopicSelect.disabled = false;
+                }
+
+                // Reset and reload conversations
+                selectedSubtopic = '';
+                await loadConversations(true);
+            });
+
+            document.getElementById('subtopicSelect').addEventListener('change', async function() {
+                selectedSubtopic = this.value;
+
+                if (selectedSubtopic === '__new__') {
+                    const newSubtopic = prompt('Enter new sub-topic name:');
+                    if (newSubtopic && newSubtopic.trim()) {
+                        const success = await createSubtopicNow(selectedTopic, newSubtopic);
+                        if (success) {
+                            selectedSubtopic = newSubtopic.toLowerCase().trim();
+                            this.value = selectedSubtopic;
+                        } else {
+                            selectedSubtopic = '';
+                            this.value = '';
+                        }
+                    } else {
+                        selectedSubtopic = '';
+                        this.value = '';
+                    }
+                }
+
+                // Reload conversations with new subtopic filter
+                await loadConversations(true);
+            });
+        }
+
+        // Create topic (copied from desktop)
+        async function createTopicNow(topicName) {
+            try {
+                const response = await fetch('/api/topics', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: topicName })
+                });
+
+                return response.ok;
+            } catch (error) {
+                console.error('Error creating topic:', error);
+                return false;
+            }
+        }
+
+        // Create subtopic (copied from desktop)
+        async function createSubtopicNow(topicName, subtopicName) {
+            try {
+                const response = await fetch(`/api/topics/${encodeURIComponent(topicName)}/subtopics`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: subtopicName })
+                });
+
+                return response.ok;
+            } catch (error) {
+                console.error('Error creating subtopic:', error);
+                return false;
+            }
+        }
+
+        // Load subtopics (copied from desktop)
+        async function loadSubtopics(topic) {
+            try {
+                const response = await fetch('/api/topics');
+                const allTopics = await response.json();
+
+                const subtopicSelect = document.getElementById('subtopicSelect');
+                subtopicSelect.innerHTML = '<option value="">All Sub-topics</option><option value="__new__">+ Create New Sub-topic</option>';
+
+                if (allTopics[topic] && allTopics[topic].length > 0) {
+                    allTopics[topic].forEach(subtopic => {
+                        const option = document.createElement('option');
+                        option.value = subtopic;
+                        option.textContent = subtopic;
+                        subtopicSelect.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error('Error loading subtopics:', error);
+            }
+        }
+
+        // Show welcome screen
+        function showWelcomeScreen() {
+            currentConversationId = null;
+            document.getElementById('welcomeScreen').style.display = 'flex';
+            document.getElementById('chatMessages').style.display = 'none';
+            document.querySelectorAll('.conversation-item').forEach(item => {
+                item.classList.remove('active');
+            });
+        }
+
+        // Start new chat
+        document.getElementById('newChatBtn').addEventListener('click', function() {
+            showWelcomeScreen();
+            closeSidebar();
+        });
+    </script>
+</body>
+</html>

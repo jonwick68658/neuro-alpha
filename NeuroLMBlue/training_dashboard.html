@@ -1,0 +1,956 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Custom Model Training Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        :root {
+            --primary-color: #4f46e5;
+            --secondary-color: #4338ca;
+            --accent-color: #ff7d4d;
+            --dark-bg: #000000;
+            --darker-bg: #1a1a1a;
+            --card-bg: #2a2a2a;
+            --light-text: #ffffff;
+            --muted-text: #9ca3af;
+            --border-color: #404040;
+        }
+
+        body {
+            background: var(--dark-bg);
+            color: var(--light-text);
+            min-height: 100vh;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header {
+            background: var(--dark-bg);
+            color: var(--light-text);
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+            position: relative;
+            min-height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header h1 {
+            font-size: 1.2rem;
+            margin: 0;
+            color: var(--light-text);
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        .header p {
+            opacity: 0.8;
+            font-size: 0.7rem;
+            color: var(--light-text);
+            display: inline-block;
+            margin: 0;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .header-title {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .hamburger-btn {
+            background: none;
+            border: none;
+            color: var(--light-text);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 4px;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+        }
+
+        .hamburger-btn:hover {
+            background: rgba(255,255,255,0.1);
+        }
+
+        .uf-score-badge {
+            background: linear-gradient(45deg, #3b82f6, #1d4ed8);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: bold;
+            margin-left: auto;
+            margin-right: 1rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            position: relative;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+        }
+
+        .uf-score-badge:hover {
+            transform: translateY(-1px);
+        }
+
+        .uf-score-tooltip {
+            position: absolute;
+            top: calc(100% + 10px);
+            right: 0;
+            background: #1f2937;
+            color: white;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            line-height: 1.4;
+            width: 280px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+            z-index: 1000;
+        }
+
+        .uf-score-tooltip::before {
+            content: '';
+            position: absolute;
+            bottom: 100%;
+            right: 12px;
+            border: 6px solid transparent;
+            border-bottom-color: #1f2937;
+        }
+
+        .uf-score-badge:hover .uf-score-tooltip {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .tooltip-title {
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #60a5fa;
+        }
+
+        .tooltip-rewards {
+            margin-top: 8px;
+        }
+
+        .tooltip-rewards strong {
+            color: #fbbf24;
+        }
+
+        .tooltip-rewards ul {
+            margin: 4px 0 0 16px;
+            padding: 0;
+        }
+
+        .tooltip-rewards li {
+            margin: 2px 0;
+            color: #d1d5db;
+        }
+
+        .uf-score-badge .score-label {
+            opacity: 0.9;
+        }
+
+        .uf-score-badge .score-value {
+            font-size: 0.8rem;
+        }
+
+        .profile-dropdown {
+            position: relative;
+        }
+
+        .profile-button {
+            background: rgba(31, 41, 55, 0.8);
+            border: 1px solid rgba(75, 85, 99, 0.5);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .profile-button:hover {
+            background: rgba(31, 41, 55, 1);
+            border-color: rgba(75, 85, 99, 0.8);
+        }
+
+        .profile-initial {
+            color: #ffffff;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+
+        .profile-menu {
+            position: absolute;
+            top: calc(100% + 8px);
+            right: 0;
+            background: rgba(31, 41, 55, 0.95);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(75, 85, 99, 0.5);
+            border-radius: 12px;
+            padding: 0.5rem 0;
+            min-width: 200px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            display: none;
+        }
+
+        .profile-menu.active {
+            display: block;
+        }
+
+        .profile-info {
+            padding: 0.75rem 1rem;
+        }
+
+        .profile-name {
+            color: #ffffff;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+
+        .profile-email {
+            color: #9ca3af;
+            font-size: 0.8rem;
+            margin-top: 0.25rem;
+        }
+
+        .profile-divider {
+            height: 1px;
+            background: rgba(75, 85, 99, 0.5);
+            margin: 0.5rem 0;
+        }
+
+        .profile-menu-item {
+            width: 100%;
+            background: none;
+            border: none;
+            padding: 0.75rem 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            color: #ffffff;
+            font-size: 0.9rem;
+            text-align: left;
+        }
+
+        .profile-menu-item:hover {
+            background: rgba(75, 85, 99, 0.3);
+        }
+
+        .profile-menu-icon {
+            font-size: 1rem;
+        }
+
+        .dashboard {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 30px;
+            flex: 1;
+        }
+
+        .page-header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .page-header h1 {
+            color: var(--light-text);
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .page-header p {
+            color: var(--muted-text);
+            font-size: 1.1em;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #3b82f6 0%, #1e40af 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+        }
+
+        .stat-card h3 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+
+        .stat-card p {
+            opacity: 0.9;
+        }
+
+        .section {
+            margin-bottom: 40px;
+        }
+
+        .section h2 {
+            color: var(--light-text);
+            font-size: 1.8em;
+            margin-bottom: 20px;
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 10px;
+        }
+
+        .analysis-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .analysis-card h3 {
+            color: var(--light-text);
+            margin-bottom: 15px;
+        }
+
+        .progress-bar {
+            background: var(--border-color);
+            border-radius: 10px;
+            height: 8px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+
+        .progress-fill {
+            background: linear-gradient(90deg, #3b82f6, #1e40af);
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #3b82f6 0%, #1e40af 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(59, 130, 246, 0.3);
+        }
+
+        .btn:disabled {
+            background: #94a3b8;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, #6b7280 0%, #374151 100%);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        }
+
+        .btn-warning {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+        }
+
+        .training-jobs {
+            display: grid;
+            gap: 20px;
+        }
+
+        .job-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .job-header {
+            display: flex;
+            justify-content: between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .job-status {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: 500;
+        }
+
+        .status-running {
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+        }
+
+        .status-completed {
+            background: rgba(16, 185, 129, 0.2);
+            color: #34d399;
+        }
+
+        .status-failed {
+            background: rgba(239, 68, 68, 0.2);
+            color: #f87171;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #f3f4f6;
+            border-top: 2px solid #3b82f6;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .alert-info {
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            color: #60a5fa;
+        }
+
+        .alert-success {
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: #34d399;
+        }
+
+        .alert-warning {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            color: #fbbf24;
+        }
+
+        .alert-error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #f87171;
+        }
+
+        .user-id-input {
+            width: 200px;
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            margin-right: 10px;
+            background: var(--card-bg);
+            color: var(--light-text);
+        }
+
+        .model-info {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+
+        .model-info h4 {
+            color: var(--light-text);
+            margin-bottom: 10px;
+        }
+
+        .model-info p {
+            color: var(--muted-text);
+            margin-bottom: 5px;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <button id="sidebarToggle" class="hamburger-btn">☰</button>
+            <div class="header-title">
+                <h1 onclick="showWelcomeScreen()" style="cursor: pointer;">NeuroLM Chat</h1>
+                <p>AI chat with integrated memory system</p>
+            </div>
+        </div>
+        
+        <div style="margin-left: 1rem; display: inline-block;">
+            <label for="modelSearch" style="margin-right: 0.3rem; font-size: 0.7rem;">Model:</label>
+            <div class="model-search-container" style="display: inline-block;">
+                <input type="text" id="modelSearch" placeholder="Choose AI" readonly style="min-width: 150px; font-size: 0.8rem; padding: 0.2rem;">
+                <div class="model-dropdown" id="modelDropdown"></div>
+            </div>
+        </div>
+        
+        <div style="margin-left: 1rem; display: inline-block;">
+            <label for="fileSearch" style="margin-right: 0.3rem; font-size: 0.7rem;">Files:</label>
+            <div class="file-search-container" style="display: inline-block;">
+                <input type="text" id="fileSearch" placeholder="Search files..." readonly style="min-width: 150px; font-size: 0.8rem; padding: 0.2rem;">
+                <div class="file-dropdown" id="fileDropdown"></div>
+            </div>
+        </div>
+        
+        <div class="uf-score-badge" id="ufScoreBadge">
+            <span class="score-label">UF Score:</span>
+            <span class="score-value" id="ufScoreValue">0</span>
+            <div class="uf-score-tooltip">
+                <div class="tooltip-title">User Feedback Score</div>
+                <div>Earn UF Score points by providing feedback on AI responses. Your feedback helps improve the system and deliver better results.</div>
+                <div class="tooltip-rewards">
+                    <strong>Upcoming rewards:</strong>
+                    <ul>
+                        <li>Cryptocurrency rewards</li>
+                        <li>Higher rate limits</li>
+                        <li>Early access to new features</li>
+                        <li>Exclusive premium capabilities</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        
+        <div class="profile-dropdown">
+            <button class="profile-button" id="profileButton">
+                <span class="profile-initial" id="profileInitial">U</span>
+            </button>
+            <div class="profile-menu" id="profileMenu">
+                <div class="profile-info">
+                    <div class="profile-name" id="profileName">User</div>
+                    <div class="profile-email" id="profileEmail">user@example.com</div>
+                </div>
+                <div class="profile-divider"></div>
+                <button class="profile-menu-item" id="profileKeysBtn">
+                    <span class="profile-menu-icon">🔑</span>
+                    <span>API Keys</span>
+                </button>
+                <button class="profile-menu-item" onclick="window.location.href='/personal-models'">
+                    <span class="profile-menu-icon">🤖</span>
+                    <span>Personal AI Models</span>
+                </button>
+                <button class="profile-menu-item" onclick="window.location.href='/training'">
+                    <span class="profile-menu-icon">🎓</span>
+                    <span>Training</span>
+                </button>
+                <button class="profile-menu-item" id="profileCreditsBtn">
+                    <span class="profile-menu-icon">💰</span>
+                    <span>Credits</span>
+                </button>
+                <button class="profile-menu-item" id="profileSettingsBtn">
+                    <span class="profile-menu-icon">⚙️</span>
+                    <span>Settings</span>
+                </button>
+                <div class="profile-divider"></div>
+                <button class="profile-menu-item" id="profileSignOutBtn">
+                    <span class="profile-menu-icon">🚪</span>
+                    <span>Sign Out</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="dashboard">
+        <div class="page-header">
+            <div style="display: flex; align-items: center; justify-content: center; gap: 20px;">
+                <img src="/static/icon-brain.png" alt="Brain" style="width: 360px; height: 240px;">
+                <div style="text-align: center;">
+                    <h1 style="margin: 0;">Custom Model Training Dashboard</h1>
+                    <p style="margin: 10px 0 0 0;">Train personalized AI models using your conversation data</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3 id="active-jobs">-</h3>
+                <p>Active Training Jobs</p>
+            </div>
+            <div class="stat-card">
+                <h3 id="completed-models">-</h3>
+                <p>Completed Models</p>
+            </div>
+            <div class="stat-card">
+                <h3 id="scheduler-status">-</h3>
+                <p>Scheduler Status</p>
+            </div>
+        </div>
+
+
+
+        <div class="section">
+            <h2>Training Jobs</h2>
+            <div class="analysis-card">
+                <h3>Manual Training Trigger</h3>
+                <p>Manually trigger training analysis for all users with sufficient data.</p>
+                <button class="btn btn-warning" onclick="triggerTraining()" style="margin-top: 15px;">
+                    <span class="loading hidden" id="trigger-loading"></span>
+                    Trigger Training Analysis
+                </button>
+                <div id="trigger-results" class="hidden"></div>
+            </div>
+            
+            <div id="training-jobs" class="training-jobs">
+                <!-- Training jobs will be loaded here -->
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Scheduler Control</h2>
+            <div class="analysis-card">
+                <h3>Training Scheduler</h3>
+                <p>The scheduler runs weekly training sessions every Sunday at 2:00 AM during off-peak hours.</p>
+                <div id="scheduler-info" class="model-info">
+                    <h4>Scheduler Status</h4>
+                    <p id="scheduler-running">Status: Loading...</p>
+                    <p id="next-run">Next run: Loading...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Header functionality - showWelcomeScreen to navigate back to main chat
+        function showWelcomeScreen() {
+            window.location.href = '/';
+        }
+        
+        // Global state
+        let currentUserId = null;
+        let trainingStatus = null;
+
+        // Initialize dashboard
+        async function initDashboard() {
+            await loadTrainingStatus();
+            await loadTrainingJobs();
+            initializeProfileMenu();
+            
+            // Refresh every 30 seconds
+            setInterval(async () => {
+                await loadTrainingStatus();
+                await loadTrainingJobs();
+            }, 30000);
+        }
+
+        // Profile menu functionality
+        let profileMenuOpen = false;
+        
+        function initializeProfileMenu() {
+            const profileButton = document.getElementById('profileButton');
+            const profileMenu = document.getElementById('profileMenu');
+            const profileKeysBtn = document.getElementById('profileKeysBtn');
+            const profileSignOutBtn = document.getElementById('profileSignOutBtn');
+            
+            profileButton.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggleProfileMenu();
+            });
+            
+            profileKeysBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                closeProfileMenu();
+                window.location.href = '/secrets';
+            });
+            
+            profileSignOutBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                closeProfileMenu();
+                logout();
+            });
+            
+            // Close profile menu when clicking outside
+            document.addEventListener('click', (e) => {
+                if (!profileButton.contains(e.target) && !profileMenu.contains(e.target)) {
+                    closeProfileMenu();
+                }
+            });
+        }
+
+        function toggleProfileMenu() {
+            const profileMenu = document.getElementById('profileMenu');
+            profileMenuOpen = !profileMenuOpen;
+            if (profileMenuOpen) {
+                profileMenu.classList.add('active');
+            } else {
+                profileMenu.classList.remove('active');
+            }
+        }
+
+        function closeProfileMenu() {
+            const profileMenu = document.getElementById('profileMenu');
+            profileMenuOpen = false;
+            profileMenu.classList.remove('active');
+        }
+
+        function logout() {
+            if (confirm('Are you sure you want to sign out?')) {
+                localStorage.removeItem('conversationId');
+                localStorage.removeItem('topicDisplayText');
+                window.location.href = '/login';
+            }
+        }
+
+        // Load user profile information for header
+        async function loadUserProfileHeader() {
+            try {
+                const response = await fetch('/api/user/name');
+                if (response.ok) {
+                    const data = await response.json();
+                    const firstName = data.first_name || 'User';
+                    const initial = firstName.charAt(0).toUpperCase();
+                    
+                    document.getElementById('profileInitial').textContent = initial;
+                    document.getElementById('profileName').textContent = firstName;
+                    
+                    // Set email to 'NeuroLM User' to match main chat
+                    const emailElement = document.getElementById('profileEmail');
+                    emailElement.textContent = 'NeuroLM User';
+                    
+                    // Update UF Score badge
+                    const ufScoreValue = document.getElementById('ufScoreValue');
+                    if (ufScoreValue && data.feedback_score !== undefined) {
+                        ufScoreValue.textContent = data.feedback_score;
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading user profile:', error);
+            }
+        }
+
+        // Load training status
+        async function loadTrainingStatus() {
+            try {
+                const response = await fetch('/api/training/scheduler/status');
+                const data = await response.json();
+                
+                trainingStatus = data;
+                updateStatsDisplay(data);
+                updateSchedulerDisplay(data);
+            } catch (error) {
+                console.error('Error loading training status:', error);
+            }
+        }
+
+        // Update stats display
+        function updateStatsDisplay(data) {
+            document.getElementById('active-jobs').textContent = data.active_jobs || 0;
+            document.getElementById('completed-models').textContent = data.completed_models || 0;
+            document.getElementById('scheduler-status').textContent = data.scheduler_running ? 'Running' : 'Stopped';
+        }
+
+        // Update scheduler display
+        function updateSchedulerDisplay(data) {
+            document.getElementById('scheduler-running').textContent = 
+                `Status: ${data.scheduler_running ? 'Running' : 'Stopped'}`;
+            document.getElementById('next-run').textContent = 
+                'Next run: Sunday 2:00 AM (weekly)';
+        }
+
+        // Load training jobs
+        async function loadTrainingJobs() {
+            const container = document.getElementById('training-jobs');
+            
+            if (!trainingStatus) {
+                container.innerHTML = '<p>Loading training jobs...</p>';
+                return;
+            }
+
+            let jobsHtml = '';
+            
+            // Active jobs
+            trainingStatus.active_training_jobs.forEach(job => {
+                jobsHtml += createJobCard(job, 'active');
+            });
+
+            // Completed models
+            trainingStatus.trained_models.forEach(model => {
+                jobsHtml += createJobCard(model, 'completed');
+            });
+
+            if (jobsHtml === '') {
+                jobsHtml = '<div class="alert alert-info">No training jobs found. Use the analysis tool to check user training potential.</div>';
+            }
+
+            container.innerHTML = jobsHtml;
+        }
+
+        // Create job card HTML
+        function createJobCard(job, type) {
+            const isActive = type === 'active';
+            const title = isActive ? `Training Job: ${job.user_id}` : `Trained Model: ${job.user_id}`;
+            const statusClass = isActive ? 'status-running' : 'status-completed';
+            const statusText = isActive ? 'Training' : 'Completed';
+            const date = isActive ? job.started_at : job.completed_at;
+            
+            return `
+                <div class="job-card">
+                    <div class="job-header">
+                        <h3>${title}</h3>
+                        <span class="job-status ${statusClass}">${statusText}</span>
+                    </div>
+                    <div class="model-info">
+                        <p><strong>Date:</strong> ${new Date(date).toLocaleString()}</p>
+                        ${isActive ? 
+                            `<p><strong>Job ID:</strong> ${job.job_id}</p>
+                             <p><strong>Model:</strong> ${job.model}</p>` :
+                            `<p><strong>Model ID:</strong> ${job.model_id}</p>
+                             <p><strong>Trained Tokens:</strong> ${job.trained_tokens?.toLocaleString() || 'N/A'}</p>`
+                        }
+                        ${isActive ? 
+                            `<button class="btn btn-secondary" onclick="checkJobStatus('${job.job_id}')">Check Status</button>` :
+                            `<button class="btn btn-success" onclick="viewModel('${job.model_id}')">View Model</button>`
+                        }
+                    </div>
+                </div>
+            `;
+        }
+
+
+
+        // Prepare training data
+        async function prepareTrainingData(userId) {
+            try {
+                const response = await fetch(`/api/training/prepare/${userId}`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (response.ok) {
+                    if (data.status === 'success') {
+                        showAlert(document.getElementById('analysis-results'), 
+                            `Training data prepared successfully! ${data.train_examples} training examples, ${data.val_examples} validation examples`, 
+                            'success');
+                    } else {
+                        showAlert(document.getElementById('analysis-results'), 
+                            data.message || 'Data preparation failed', 
+                            'error');
+                    }
+                } else {
+                    showAlert(document.getElementById('analysis-results'), 
+                        data.detail || 'Data preparation failed', 
+                        'error');
+                }
+            } catch (error) {
+                showAlert(document.getElementById('analysis-results'), 
+                    'Error preparing training data: ' + error.message, 
+                    'error');
+            }
+        }
+
+        // Trigger training analysis
+        async function triggerTraining() {
+            const button = event.target;
+            const loading = document.getElementById('trigger-loading');
+            const resultsDiv = document.getElementById('trigger-results');
+            
+            button.disabled = true;
+            loading.classList.remove('hidden');
+            
+            try {
+                const response = await fetch('/api/training/scheduler/trigger', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showAlert(resultsDiv, 
+                        `Training analysis completed. ${data.users_ready_for_training} users ready for training, ${data.training_jobs_started} jobs started.`, 
+                        'success');
+                    
+                    // Refresh training jobs
+                    await loadTrainingStatus();
+                    await loadTrainingJobs();
+                } else {
+                    showAlert(resultsDiv, data.detail || 'Training trigger failed', 'error');
+                }
+            } catch (error) {
+                showAlert(resultsDiv, 'Error triggering training: ' + error.message, 'error');
+            } finally {
+                button.disabled = false;
+                loading.classList.add('hidden');
+            }
+        }
+
+        // Check job status
+        async function checkJobStatus(jobId) {
+            try {
+                const response = await fetch(`/api/training/status/${jobId}`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    alert(`Job Status: ${data.status}\nModel: ${data.model}\nTrained Tokens: ${data.trained_tokens || 'N/A'}`);
+                } else {
+                    alert('Error checking status: ' + (data.detail || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Error checking job status: ' + error.message);
+            }
+        }
+
+        // View model
+        function viewModel(modelId) {
+            alert(`Model ID: ${modelId}\n\nThis model can be used in the chat interface by selecting it from the model dropdown.`);
+        }
+
+        // Show alert
+        function showAlert(container, message, type) {
+            const alertHtml = `<div class="alert alert-${type}">${message}</div>`;
+            container.innerHTML = alertHtml;
+            container.classList.remove('hidden');
+        }
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', initDashboard);
+        
+        // Load profile immediately like chat.html
+        loadUserProfileHeader();
+    </script>
+</body>
+</html>

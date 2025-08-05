@@ -1,0 +1,1482 @@
+"""
+Hybrid Intelligent Memory System (Production-Ready Replacement)
+
+Core objectives
+- Conversation-first, topic/sub-topic scoped retrieval with strict anti-leakage
+- Hybrid search (lexical + vector) with recency and normalized quality blending
+- Tiered retrieval funnel with deterministic policy and explainability
+- Dedupe + importance gating on store
+- Optional Neo4j enhancement with scoped filters
+- SDK-ready API surface for future Memory-as-a-Service
+
+Design notes
+- Global fallback is DISABLED by default (policy-controlled)
+- Adds tsvector usage (requires DB migration to add `ts` + GIN index; setup helper provided)
+- Keeps current DB schema (intelligent_memories, conversations). Topics live in `conversations`.
+- Requires pgvector and ivfflat index for performance at scale.
+- Uses OpenAI embeddings (via openai SDK). Swap model via env EMBEDDING_MODEL.
+
+Industry alignment
+- Explicit, scoped, auditable memory improves factuality and reduces drift, aligning with “explicit memory” approaches like Memory3 [arxiv.org](https://arxiv.org/html/2407.01178v1).
+- Tiered recall (verbatim recent + scoped semantic continuity) mirrors hippocampus-inspired hybrids for month‑long dialogues [arxiv.org](https://arxiv.org/abs/2504.16754).
+"""
+
+import asyncio
+import os
+import re
+import hashlib
+import json
+import uuid
+from dataclasses import dataclass
+from typing import List, Dict, Optional, Tuple, Any
+
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from psycopg2.pool import ThreadedConnectionPool
+
+# Optional Neo4j
+try:
+    from neo4j import GraphDatabase  # type: ignore
+    try:
+        from neo4j.exceptions import Neo4jError as _Neo4jError  # type: ignore
+    except Exception:
+        _Neo4jError = Exception
+    NEO4J_AVAILABLE = True
+except ImportError:
+    GraphDatabase = None  # type: ignore
+    _Neo4JError = Exception
+    NEO4J_AVAILABLE = False
+
+# Embeddings via OpenAI SDK
+try:
+    import openai
+    _HAS_OPENAI = True
+except ImportError:
+    _HAS_OPENAI = False
+
+
+# -------------------- Env helpers --------------------
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+def _env_bool(name: str, default: bool) -> bool:
+    val = os.getenv(name, str(default)).lower()
+    return val in ("1", "true", "yes", "y", "on")
+
+def _pgvector_literal(vec: List[float]) -> str:
+    return "[" + ",".join(f"{float(x):.8f}" for x in vec) + "]"
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+# -------------------- Policies --------------------
+
+@dataclass
+class RetrievalPolicy:
+    # Tier sizes
+    k_recent: int = _env_int("MEMORY_K_RECENT", 6)   # last K messages from this conversation (no vectors)
+    k_conv: int = _env_int("MEMORY_K_CONV", 5)       # vector/hybrid results from same conversation
+    k_topic: int = _env_int("MEMORY_K_TOPIC", 5)     # vector/hybrid from same topic/sub_topic (excluding current conversation)
+    k_global: int = _env_int("MEMORY_K_GLOBAL", 2)   # final fallback if enabled
+
+    # Enable/disable tiers
+    allow_topic_widen: bool = _env_bool("MEMORY_ALLOW_TOPIC_WIDEN", True)
+    allow_global_fallback: bool = _env_bool("MEMORY_ALLOW_GLOBAL_FALLBACK", False)  # default disabled
+
+    # Scoring weights
+    w_sim: float = _env_float("MEMORY_W_SIM", 0.55)
+    w_bm25: float = _env_float("MEMORY_W_BM25", 0.20)
+    w_q: float = _env_float("MEMORY_W_Q", 0.10)         # normalized quality (0..1)
+    w_recency: float = _env_float("MEMORY_W_RECENCY", 0.15)
+    # Scope bonuses (added directly to composite)
+    scope_bonus_conversation: float = _env_float("MEMORY_SCOPE_BONUS_CONV", 1.0)
+    scope_bonus_topic: float = _env_float("MEMORY_SCOPE_BONUS_TOPIC", 0.5)
+    scope_bonus_global_penalty: float = _env_float("MEMORY_SCOPE_PENALTY_GLOBAL", -1.0)
+
+    # Cutoffs and decay
+    min_similarity: float = _env_float("MEMORY_SIMILARITY_CUTOFF", 0.30)
+    lambda_decay: float = _env_float("MEMORY_LAMBDA_DECAY", 0.0096)  # ~ half-life ~3 days
+
+    # Lexical search
+    tsquery_mode: str = os.getenv("MEMORY_TSQUERY_MODE", "websearch")  # or 'plainto'
+
+
+# -------------------- Router --------------------
+
+class MemoryRouter:
+    def __init__(self):
+        self.patterns_recall = [
+            r'\b(what did i tell you|do you remember|you know that i|i mentioned|we discussed)\b',
+            r'\b(remember when|you said|i told you|as i said)\b',
+            r'\b(what do you know about my|tell me about my|what about my)\b',
+            r'\b(about my|my.*\?|know.*about.*me)\b',
+            r'\b(previous|earlier|before)\b',
+        ]
+        self.patterns_greeting = [
+            r'\b(hello|hi|hey|good morning|good evening)\b',
+        ]
+
+    def should_use_memory(self, user_text: str, has_recent_context: bool) -> Tuple[bool, str]:
+        tl = user_text.lower()
+        if any(re.search(p, tl) for p in self.patterns_greeting):
+            # greetings: rely on recent context only
+            return has_recent_context, "greeting"
+        if any(re.search(p, tl) for p in self.patterns_recall):
+            return True, "explicit_recall"
+        # If conversation already has content, allow memory (Tier 1 and Tier 2)
+        return has_recent_context, "implicit_context"
+
+
+# -------------------- Importance Scorer --------------------
+
+class ImportanceScorer:
+    def score_importance(self, content: str, context: str = "") -> float:
+        score = 0.0
+        cl = content.lower()
+
+        personal_patterns = [
+            r'\b(my name is|i am|i work at|i live in|my email|my phone|i study|i run|we are)\b',
+            r'\b(my birthday|my address|my job|my family|my wife|my husband|my child|my company)\b',
+        ]
+        for p in personal_patterns:
+            if re.search(p, cl):
+                score += 0.4
+                break
+
+        preference_words = ['love', 'hate', 'like', 'dislike', 'prefer', 'favorite', 'important', 'priority']
+        if any(w in cl for w in preference_words):
+            score += 0.25
+
+        specificity_patterns = [
+            r'\b\d{4}-\d{2}-\d{2}\b',              # dates
+            r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b',  # proper nouns
+            r'\b\d+\b',                             # numbers
+        ]
+        for p in specificity_patterns:
+            if re.search(p, content):
+                score += 0.1
+                break
+
+        future_words = ['tomorrow', 'next week', 'remember', 'remind', 'later', 'upcoming', 'deadline', 'due']
+        if any(w in cl for w in future_words):
+            score += 0.2
+
+        if len(content) > 120:
+            score += 0.05
+
+        # penalize ultra-short generic statements
+        if len(content.strip()) < 15:
+            score -= 0.1
+
+        return max(0.0, min(1.0, score))
+
+
+# -------------------- Memory Service --------------------
+
+class HybridIntelligentMemorySystem:
+    """
+    Production Memory System with:
+    - Tiered retrieval (Recent -> Conversation -> Topic/Sub-Topic -> Global[off])
+    - Hybrid scoring (similarity + bm25 + quality_norm + recency + scope bonuses)
+    - Strict scoping to prevent cross-topic leakage
+    - Optional Neo4j layer
+    - Dedupe + importance gating on store
+    """
+
+    def __init__(self):
+        self.router = MemoryRouter()
+        self.scorer = ImportanceScorer()
+
+        # Models
+        self.embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+        self.embedding_dim = _env_int("EMBEDDING_DIM", 1536)
+
+        # Postgres
+        self.database_url = os.getenv("DATABASE_URL")
+        if not self.database_url:
+            print("WARN Memory: DATABASE_URL not set; DB operations will fail.")
+        try:
+            self.connection_pool = ThreadedConnectionPool(1, _env_int("DB_POOL_MAX", 30), self.database_url)
+            print("✅ Memory: PostgreSQL connection pool initialized")
+        except Exception as e:
+            print(f"⚠️ Memory: Failed to initialize connection pool: {e}")
+            self.connection_pool = None
+
+        # Neo4j
+        self.neo4j_driver = None
+        self.neo4j_available = False
+        self._setup_neo4j()
+
+        # Policy defaults
+        self.default_policy = RetrievalPolicy()
+
+        print("✅ Hybrid intelligent memory system initialized")
+
+    # ------------- Connections -------------
+
+    def get_pg_connection(self):
+        if self.connection_pool:
+            try:
+                return self.connection_pool.getconn()
+            except psycopg2.Error as e:
+                print(f"⚠️ Memory: Failed to get connection from pool: {e}")
+                return psycopg2.connect(self.database_url)
+        return psycopg2.connect(self.database_url)
+
+    def return_pg_connection(self, conn):
+        if self.connection_pool and conn:
+            try:
+                self.connection_pool.putconn(conn)
+            except psycopg2.Error as e:
+                print(f"⚠️ Memory: Failed to return connection to pool: {e}")
+                try:
+                    conn.close()
+                except psycopg2.Error:
+                    pass
+
+    def _setup_neo4j(self):
+        if not NEO4J_AVAILABLE or GraphDatabase is None:
+            print("ℹ️ Memory: Neo4j driver not available, PostgreSQL-only mode")
+            return
+        try:
+            neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+            neo4j_user = os.getenv("NEO4J_USERNAME", "neo4j")
+            neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
+
+            self.neo4j_driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+            with self.neo4j_driver.session() as session:
+                session.run("RETURN 1")
+            self.neo4j_available = True
+
+            # Ensure vector index (best-effort)
+            try:
+                with self.neo4j_driver.session() as session:
+                    session.run("""
+                        CREATE VECTOR INDEX memory_embedding_index IF NOT EXISTS
+                        FOR (m:IntelligentMemory) ON (m.embedding)
+                        OPTIONS {indexConfig: {
+                            `vector.dimensions`: $dims,
+                            `vector.similarity_function`: 'cosine'
+                        }}
+                    """, {"dims": self.embedding_dim})
+                print("✅ Memory: Neo4j vector index ensured")
+            except _Neo4jError as e:
+                print(f"⚠️ Memory: Neo4j vector index ensure failed: {e}")
+
+            print("✅ Memory: Neo4j enhancement layer connected")
+        except _Neo4jError as e:
+            print(f"⚠️ Memory: Neo4j enhancement unavailable: {e}")
+            print("📊 Memory: Operating in PostgreSQL-only mode")
+            self.neo4j_available = False
+
+    async def _to_thread(self, func, *args, **kwargs):
+        return await asyncio.to_thread(func, *args, **kwargs)
+
+    # ------------- Outbox Event Creation -------------
+
+    def _create_outbox_event_sync(self, event_type: str, entity_id: str, payload: Dict[str, Any], conn) -> bool:
+        """
+        Create an outbox event within an existing database connection/transaction.
+        This ensures atomicity with the main memory storage operation.
+        """
+        try:
+            cursor = conn.cursor()
+            event_id = str(uuid.uuid4())
+            cursor.execute(
+                """
+                INSERT INTO graph_outbox (id, event_type, entity_id, payload, status, attempts)
+                VALUES (%s, %s, %s, %s, 'pending', 0)
+                """,
+                (event_id, event_type, entity_id, json.dumps(payload))
+            )
+            return True
+        except psycopg2.Error as e:
+            print(f"⚠️ Memory: Failed to create outbox event: {e}")
+            return False
+        finally:
+            try:
+                cursor.close()
+            except psycopg2.Error:
+                pass
+
+    # ------------- Setup Helpers (Idempotent) -------------
+
+    async def ensure_text_search_support(self) -> bool:
+        """
+        Ensure `ts` column and index exist. Call at service startup.
+        """
+        def _run() -> bool:
+            conn = self.get_pg_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute("""
+                    ALTER TABLE intelligent_memories
+                    ADD COLUMN IF NOT EXISTS ts tsvector
+                """)
+                cur.execute("""
+                    UPDATE intelligent_memories
+                    SET ts = to_tsvector('english', coalesce(content, ''))
+                    WHERE ts IS NULL
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_im_ts
+                    ON intelligent_memories
+                    USING GIN (ts)
+                """)
+                conn.commit()
+                return True
+            finally:
+                try:
+                    cur.close()
+                except Exception:
+                    pass
+                self.return_pg_connection(conn)
+        try:
+            return await self._to_thread(_run)
+        except Exception as e:
+            print(f"⚠️ Memory: ensure_text_search_support error: {e}")
+            return False
+
+    # ------------- Embeddings -------------
+
+    def _generate_embedding_sync(self, text: str) -> List[float]:
+        if not _HAS_OPENAI:
+            print("⚠️ Memory: openai SDK not installed; cannot generate embeddings.")
+            return []
+        try:
+            client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            resp = client.embeddings.create(model=self.embedding_model, input=text)
+            vec = resp.data[0].embedding
+            # Optional: verify dimension
+            if self.embedding_dim and len(vec) != self.embedding_dim:
+                print(f"⚠️ Memory: embedding dim mismatch: got {len(vec)}, expected {self.embedding_dim}")
+            return vec
+        except Exception as e:
+            print(f"Embedding generation error: {e}")
+            return []
+
+    async def generate_embedding(self, text: str) -> List[float]:
+        return await self._to_thread(self._generate_embedding_sync, text)
+
+    # ------------- Storage -------------
+
+    async def store_memory(
+        self,
+        content: str,
+        user_id: str,
+        conversation_id: Optional[str],
+        message_type: str = "user",
+        message_id: Optional[int] = None,
+        dedupe_within_recent: int = 50,
+    ) -> Optional[str]:
+        """
+        Store memory with importance gating and dedupe within the same conversation.
+        If conversation_id is None, still stores but retrieval will be limited without scope.
+        """
+        try:
+            importance = self.scorer.score_importance(content)
+            if importance < 0.1:
+                return None
+
+            # Dedupe: check last N memories of same conversation for near-duplicates
+            if conversation_id:
+                if await self._is_near_duplicate(user_id, conversation_id, content, dedupe_within_recent):
+                    return None
+
+            embedding = await self.generate_embedding(content)
+            if not embedding:
+                return None
+
+            vec_literal = _pgvector_literal(embedding)
+
+            def _insert_sync() -> Optional[str]:
+                conn = self.get_pg_connection()
+                try:
+                    cur = conn.cursor()
+                    # Insert memory record
+                    cur.execute(
+                        """
+                        INSERT INTO intelligent_memories (
+                            user_id, content, message_type, conversation_id, message_id,
+                            embedding, importance, created_at, updated_at, ts, timestamp
+                        ) VALUES (
+                            %s, %s, %s, %s, %s,
+                            %s::vector, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                            to_tsvector('english', coalesce(%s, '')), CURRENT_TIMESTAMP
+                        )
+                        RETURNING id
+                        """,
+                        (user_id, content, message_type, conversation_id, message_id,
+                         vec_literal, importance, content),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        return None
+                    
+                    memory_id = str(row[0])
+                    
+                    # Create outbox event for message upsert
+                    message_payload = {
+                        "conversation_id": conversation_id,
+                        "message_id": memory_id,
+                        "message_type": message_type
+                    }
+                    outbox_success = self._create_outbox_event_sync(
+                        event_type="message_upsert",
+                        entity_id=memory_id,
+                        payload=message_payload,
+                        conn=conn
+                    )
+                    
+                    if not outbox_success:
+                        print(f"⚠️ Memory: Outbox event creation failed for memory {memory_id}, rolling back")
+                        conn.rollback()
+                        return None
+                    
+                    conn.commit()
+                    return memory_id
+                finally:
+                    try:
+                        cur.close()
+                    except psycopg2.Error:
+                        pass
+                    self.return_pg_connection(conn)
+
+            return await self._to_thread(_insert_sync)
+        except (psycopg2.Error, ValueError, RuntimeError) as e:
+            print(f"Error storing memory: {e}")
+            return None
+
+    async def _is_near_duplicate(self, user_id: str, conversation_id: str, content: str, recent_n: int) -> bool:
+        """
+        Cheap dedupe: look at last N items in this conversation and skip if exact or near-duplicate (high lexical overlap).
+        """
+        def _fetch_recent() -> List[str]:
+            conn = self.get_pg_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT content
+                    FROM intelligent_memories
+                    WHERE user_id = %s AND conversation_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (user_id, conversation_id, recent_n),
+                )
+                rows = cur.fetchall()
+                return [r[0] for r in rows]
+            finally:
+                try:
+                    cur.close()
+                except Exception:
+                    pass
+                self.return_pg_connection(conn)
+
+        try:
+            recents = await self._to_thread(_fetch_recent)
+            normalized_new = re.sub(r"\s+", " ", content.strip().lower())
+            s_new = set(normalized_new.split())
+            for r in recents:
+                if not r:
+                    continue
+                normalized_old = re.sub(r"\s+", " ", r.strip().lower())
+                if normalized_old == normalized_new:
+                    return True
+                s_old = set(normalized_old.split())
+                if s_new and (len(s_new & s_old) / len(s_new | s_old)) > 0.9:
+                    return True
+            return False
+        except Exception:
+            return False
+
+    # ------------- Updates (kept compatible) -------------
+
+    async def update_memory_quality_score(self, memory_id: str, r_t_score: float) -> bool:
+        """
+        Persist model-based response quality R(t) into quality_score; also mirror r_t_score.
+        """
+        def _update_sync() -> bool:
+            conn = self.get_pg_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE intelligent_memories
+                    SET quality_score = %s,
+                        r_t_score = %s,
+                        evaluation_timestamp = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                    """,
+                    (r_t_score, r_t_score, memory_id),
+                )
+                ok = cur.rowcount > 0
+                conn.commit()
+                return ok
+            finally:
+                try:
+                    cur.close()
+                except psycopg2.Error:
+                    pass
+                self.return_pg_connection(conn)
+
+        try:
+            return await self._to_thread(_update_sync)
+        except (psycopg2.Error, ValueError) as e:
+            print(f"Error updating memory quality score: {e}")
+            return False
+
+    async def update_human_feedback_by_node_id(
+        self, node_id: str, feedback_score: float, feedback_type: str, user_id: str
+    ) -> bool:
+        """
+        Persist explicit human feedback H(t) for a memory.
+        """
+        def _update_sync() -> bool:
+            conn = self.get_pg_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE intelligent_memories
+                    SET human_feedback_score = %s,
+                        h_t_score = %s,
+                        human_feedback_type = %s,
+                        human_feedback_timestamp = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (feedback_score, feedback_score, feedback_type, node_id, user_id),
+                )
+                ok = cur.rowcount > 0
+                
+                if ok:
+                    # Create outbox event for feedback update
+                    feedback_payload = {
+                        "user_id": user_id,
+                        "message_id": node_id,
+                        "feedback_type": feedback_type,
+                        "score": feedback_score
+                    }
+                    outbox_success = self._create_outbox_event_sync(
+                        event_type="feedback",
+                        entity_id=node_id,
+                        payload=feedback_payload,
+                        conn=conn
+                    )
+                    
+                    if not outbox_success:
+                        print(f"⚠️ Memory: Outbox event creation failed for feedback {node_id}, rolling back")
+                        conn.rollback()
+                        return False
+                
+                conn.commit()
+                return ok
+            finally:
+                try:
+                    cur.close()
+                except psycopg2.Error:
+                    pass
+                self.return_pg_connection(conn)
+
+        try:
+            return await self._to_thread(_update_sync)
+        except (psycopg2.Error, ValueError) as e:
+            print(f"Error updating human feedback: {e}")
+            return False
+
+    def calculate_final_quality_score(
+        self, r_t_score: Optional[float], h_t_score: Optional[float]
+    ) -> Optional[float]:
+        """
+        Combine R(t) and H(t) into a final 1..10 score.
+        Keep semantics stable: if H(t) exists, it gets extra weight but bounded.
+        """
+        if r_t_score is None and h_t_score is None:
+            return None
+        r_t = r_t_score if r_t_score is not None else 5.0
+        h_t = h_t_score if h_t_score is not None else 0.0
+        weighted_h_t = h_t * 1.5
+        if h_t_score is not None:
+            final_score = (r_t * 0.6) + (weighted_h_t * 0.4)
+        else:
+            final_score = r_t
+        return max(1.0, min(10.0, final_score))
+
+    async def update_final_quality_score(self, memory_id: str, user_id: str) -> bool:
+        """
+        Recompute and persist final_quality_score from current quality_score and human_feedback_score.
+        """
+        def _update_sync() -> bool:
+            conn = self.get_pg_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT quality_score, human_feedback_score
+                    FROM intelligent_memories
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (memory_id, user_id),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return False
+                r_t_score, h_t_score = row
+                final_score = self.calculate_final_quality_score(r_t_score, h_t_score)
+                if final_score is None:
+                    return False
+                cur.execute(
+                    """
+                    UPDATE intelligent_memories
+                    SET final_quality_score = %s,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (final_score, memory_id, user_id),
+                )
+                ok = cur.rowcount > 0
+                conn.commit()
+                return ok
+            finally:
+                try:
+                    cur.close()
+                except psycopg2.Error:
+                    pass
+                self.return_pg_connection(conn)
+
+        try:
+            return await self._to_thread(_update_sync)
+        except psycopg2.Error as e:
+            print(f"Database error updating final quality score: {e}")
+            return False
+        except ValueError as e:
+            print(f"Value error updating final quality score: {e}")
+            return False
+
+    # ------------- Retrieval Orchestrator -------------
+
+    async def retrieve_memory(
+        self,
+        query: str,
+        user_id: str,
+        conversation_id: Optional[str],
+        policy: Optional[RetrievalPolicy] = None,
+        return_explain: bool = False,
+    ) -> str | Tuple[str, Dict[str, Any]]:
+        """
+        Tiered retrieval orchestrator:
+        - Tier 1: Recent messages in conversation
+        - Tier 2: Conversation-scoped hybrid search
+        - Tier 3: Topic/Sub-topic-scoped hybrid search (join conversations)
+        - Tier 4: Global user fallback (disabled by default)
+        Returns concatenated string of selected memories.
+        If return_explain=True, returns (text, explain_dict).
+        """
+        pol = policy or self.default_policy
+        has_recent = await self._has_conversation_history(user_id, conversation_id)
+        use_mem, reason = self.router.should_use_memory(query, has_recent_context=has_recent)
+
+        query_embedding: List[float] = []
+        explain: Dict[str, Any] = {
+            "policy": pol.__dict__,
+            "router": {"use_memory": use_mem, "reason": reason, "has_recent": has_recent},
+            "tiers": {},
+            "final_selection": []
+        }
+
+        # Tier 1
+        tier1 = await self._get_recent_conversation_messages(user_id, conversation_id, pol.k_recent)
+        tier1_items = [{"content": t["content"], "scope": "conversation_recent", "score": None} for t in tier1]
+        explain["tiers"]["tier1_recent"] = {"count": len(tier1_items)}
+
+        candidates: List[Dict[str, Any]] = []
+        candidates.extend(tier1_items)
+
+        if not use_mem:
+            # Only return tier1 when memory not needed
+            text = self._concat_candidates(candidates)
+            if return_explain:
+                explain["final_selection"] = candidates
+                return text, explain
+            return text
+
+        # Embedding once
+        query_embedding = await self.generate_embedding(query)
+
+        # Tier 2
+        tier2_pg = await self._retrieve_conv_scoped_postgres(
+            query=query,
+            query_embedding=query_embedding,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            pol=pol
+        )
+        explain["tiers"]["tier2_conv"] = {"count": len(tier2_pg)}
+        candidates.extend(tier2_pg)
+
+        # Optionally also fetch via Neo4j and merge (post-filter by scope)
+        if self.neo4j_available and conversation_id:
+            tier2_n4j = await self._neo4j_conv_scoped(query_embedding, user_id, conversation_id, pol, limit=pol.k_conv)
+            explain["tiers"]["tier2_conv_neo4j"] = {"count": len(tier2_n4j)}
+            candidates.extend(tier2_n4j)
+        else:
+            explain["tiers"]["tier2_conv_neo4j"] = {"count": 0}
+
+        # Tier 3
+        if pol.allow_topic_widen and len(tier2_pg) < max(1, pol.k_conv // 2) and conversation_id:
+            tier3_pg = await self._retrieve_topic_scoped_postgres(
+                query=query,
+                query_embedding=query_embedding,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                pol=pol
+            )
+            explain["tiers"]["tier3_topic"] = {"count": len(tier3_pg)}
+            candidates.extend(tier3_pg)
+
+            if self.neo4j_available:
+                # Fetch topic/subtopic with guard to ensure topic is a str (not Optional[str])
+                topic_info = await self._get_topic_for_conversation(user_id, conversation_id)
+                topic_val = topic_info.get("topic") if topic_info else None
+                if topic_val:
+                    tier3_n4j = await self._neo4j_topic_scoped(
+                        query_embedding=query_embedding,
+                        user_id=user_id,
+                        topic=topic_val,  # guaranteed str here
+                        sub_topic=topic_info.get("sub_topic") if topic_info else None,
+                        exclude_conversation_id=conversation_id,
+                        pol=pol,
+                        limit=pol.k_topic
+                    )
+                    explain["tiers"]["tier3_topic_neo4j"] = {"count": len(tier3_n4j)}
+                    candidates.extend(tier3_n4j)
+                else:
+                    explain["tiers"]["tier3_topic_neo4j"] = {"count": 0}
+        else:
+            explain["tiers"]["tier3_topic"] = {"count": 0}
+            explain["tiers"]["tier3_topic_neo4j"] = {"count": 0}
+
+        # Tier 4
+        if pol.allow_global_fallback and len(candidates) < pol.k_recent + pol.k_conv:
+            tier4 = await self._retrieve_global_fallback_postgres(
+                query=query,
+                query_embedding=query_embedding,
+                user_id=user_id,
+                exclude_conversation_id=conversation_id,
+                pol=pol
+            )
+            explain["tiers"]["tier4_global"] = {"count": len(tier4)}
+            candidates.extend(tier4)
+        else:
+            explain["tiers"]["tier4_global"] = {"count": 0}
+
+        # Deduplicate and order
+        deduped = self._dedupe_candidates(candidates)
+        tier1_cnt = len(tier1_items)
+        non_tier1 = [c for c in deduped if c["scope"] != "conversation_recent"]
+        non_tier1_sorted = sorted(non_tier1, key=lambda x: (x.get("score") or 0.0), reverse=True)
+
+        max_items = pol.k_recent + pol.k_conv + pol.k_topic + (pol.k_global if pol.allow_global_fallback else 0)
+        final_candidates = (tier1_items + non_tier1_sorted)[:max_items]
+
+        text = self._concat_candidates(final_candidates)
+        if return_explain:
+            explain["final_selection"] = final_candidates
+            return text, explain
+        return text
+
+    # ------------- Tier Helpers (Postgres) -------------
+
+    async def _has_conversation_history(self, user_id: str, conversation_id: Optional[str]) -> bool:
+        if not conversation_id:
+            return False
+
+        def _q() -> bool:
+            conn = self.get_pg_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT 1
+                    FROM intelligent_memories
+                    WHERE user_id = %s AND conversation_id = %s
+                    LIMIT 1
+                    """,
+                    (user_id, conversation_id),
+                )
+                row = cur.fetchone()
+                return row is not None
+            finally:
+                try:
+                    cur.close()
+                except Exception:
+                    pass
+                self.return_pg_connection(conn)
+
+        try:
+            return await self._to_thread(_q)
+        except Exception:
+            return False
+
+    async def _get_recent_conversation_messages(
+        self, user_id: str, conversation_id: Optional[str], k: int
+    ) -> List[Dict[str, Any]]:
+        if not conversation_id or k <= 0:
+            return []
+
+        def _q() -> List[Dict[str, Any]]:
+            conn = self.get_pg_connection()
+            try:
+                cur = conn.cursor(cursor_factory=RealDictCursor)
+                cur.execute(
+                    """
+                    SELECT content, created_at, message_type
+                    FROM intelligent_memories
+                    WHERE user_id = %s AND conversation_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (user_id, conversation_id, k),
+                )
+                rows = cur.fetchall()
+                rows.reverse()  # chronological
+                # Normalize RealDictRow -> Dict[str, Any]
+                return [dict(r) for r in rows]
+            finally:
+                try:
+                    cur.close()
+                except Exception:
+                    pass
+                self.return_pg_connection(conn)
+
+        try:
+            return await self._to_thread(_q)
+        except Exception:
+            return []
+
+    async def _retrieve_conv_scoped_postgres(
+        self, query: str, query_embedding: List[float], user_id: str, conversation_id: Optional[str], pol: RetrievalPolicy
+    ) -> List[Dict[str, Any]]:
+        if not conversation_id or not query_embedding:
+            return []
+
+        vec_literal = _pgvector_literal(query_embedding)
+        ts_fn = "websearch_to_tsquery" if pol.tsquery_mode == "websearch" else "plainto_tsquery"
+
+        def _q() -> List[Dict[str, Any]]:
+            conn = self.get_pg_connection()
+            try:
+                cur = conn.cursor(cursor_factory=RealDictCursor)
+                cur.execute(
+                    f"""
+                    WITH candidates AS (
+                        SELECT
+                            content,
+                            created_at,
+                            (1 - (embedding <=> %s::vector)) AS similarity,
+                            COALESCE(final_quality_score, 0)/10.0 AS q_norm,
+                            EXTRACT(EPOCH FROM (NOW() - created_at))/3600.0 AS age_h,
+                            ts_rank_cd(ts, {ts_fn}('english', %s)) AS bm25
+                        FROM intelligent_memories
+                        WHERE user_id = %s
+                          AND conversation_id = %s
+                          AND (
+                            ts @@ {ts_fn}('english', %s)
+                            OR %s = ''
+                          )
+                          AND (1 - (embedding <=> %s::vector)) >= %s
+                        ORDER BY created_at DESC
+                        LIMIT 500
+                    )
+                    SELECT
+                        content,
+                        similarity,
+                        q_norm,
+                        age_h,
+                        bm25,
+                        (%s * similarity) +
+                        (%s * COALESCE(bm25, 0)) +
+                        (%s * q_norm) +
+                        (%s * EXP(-%s * age_h)) +
+                        (%s) AS composite_score
+                    FROM candidates
+                    ORDER BY composite_score DESC
+                    LIMIT %s
+                    """,
+                    (
+                        vec_literal,
+                        query,
+                        user_id,
+                        conversation_id,
+                        query,
+                        query,
+                        vec_literal,
+                        pol.min_similarity,
+                        pol.w_sim,
+                        pol.w_bm25,
+                        pol.w_q,
+                        pol.w_recency, pol.lambda_decay,
+                        pol.scope_bonus_conversation,
+                        pol.k_conv,
+                    ),
+                )
+                rows = cur.fetchall()
+                return [
+                    {
+                        "content": r["content"],
+                        "scope": "conversation_scoped",
+                        "score": float(r["composite_score"]),
+                        "signals": {
+                            "similarity": float(r["similarity"]),
+                            "q_norm": float(r["q_norm"]),
+                            "age_h": float(r["age_h"]),
+                            "bm25": float(r["bm25"]) if r["bm25"] is not None else 0.0
+                        }
+                    } for r in rows
+                ]
+            finally:
+                try:
+                    cur.close()
+                except Exception:
+                    pass
+                self.return_pg_connection(conn)
+
+        try:
+            return await self._to_thread(_q)
+        except Exception as e:
+            print(f"PostgreSQL conv-scoped retrieval error: {e}")
+            return []
+
+    async def _retrieve_topic_scoped_postgres(
+        self, query: str, query_embedding: List[float], user_id: str, conversation_id: Optional[str], pol: RetrievalPolicy
+    ) -> List[Dict[str, Any]]:
+        if not query_embedding or not conversation_id:
+            return []
+
+        vec_literal = _pgvector_literal(query_embedding)
+        ts_fn = "websearch_to_tsquery" if pol.tsquery_mode == "websearch" else "plainto_tsquery"
+
+        def _q() -> List[Dict[str, Any]]:
+            conn = self.get_pg_connection()
+            try:
+                cur = conn.cursor(cursor_factory=RealDictCursor)
+
+                # Topic/sub_topic for current conversation
+                cur.execute(
+                    """
+                    SELECT topic, sub_topic
+                    FROM conversations
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (conversation_id, user_id),
+                )
+                row = cur.fetchone()
+                if not row or not row.get("topic"):
+                    return []
+                topic = row["topic"]
+                sub_topic = row.get("sub_topic")
+
+                # Topic-scoped retrieval (exclude current conversation)
+                cur.execute(
+                    f"""
+                    WITH candidates AS (
+                        SELECT
+                            im.content AS content,
+                            im.created_at AS created_at,
+                            (1 - (im.embedding <=> %s::vector)) AS similarity,
+                            COALESCE(im.final_quality_score, 0)/10.0 AS q_norm,
+                            EXTRACT(EPOCH FROM (NOW() - im.created_at))/3600.0 AS age_h,
+                            ts_rank_cd(im.ts, {ts_fn}('english', %s)) AS bm25
+                        FROM intelligent_memories im
+                        JOIN conversations c
+                          ON c.id = im.conversation_id
+                        WHERE im.user_id = %s
+                          AND c.topic = %s
+                          AND (%s IS NULL OR c.sub_topic = %s)
+                          AND im.conversation_id <> %s
+                          AND (
+                            im.ts @@ {ts_fn}('english', %s)
+                            OR %s = ''
+                          )
+                          AND (1 - (im.embedding <=> %s::vector)) >= %s
+                        ORDER BY im.created_at DESC
+                        LIMIT 1000
+                    )
+                    SELECT
+                        content,
+                        similarity,
+                        q_norm,
+                        age_h,
+                        bm25,
+                        (%s * similarity) +
+                        (%s * COALESCE(bm25, 0)) +
+                        (%s * q_norm) +
+                        (%s * EXP(-%s * age_h)) +
+                        (%s) AS composite_score
+                    FROM candidates
+                    ORDER BY composite_score DESC
+                    LIMIT %s
+                    """,
+                    (
+                        vec_literal,
+                        query,
+                        user_id,
+                        topic,
+                        sub_topic, sub_topic,
+                        conversation_id,
+                        query,
+                        query,
+                        vec_literal,
+                        pol.min_similarity,
+                        pol.w_sim,
+                        pol.w_bm25,
+                        pol.w_q,
+                        pol.w_recency, pol.lambda_decay,
+                        pol.scope_bonus_topic,
+                        pol.k_topic,
+                    ),
+                )
+                rows = cur.fetchall()
+                return [
+                    {
+                        "content": r["content"],
+                        "scope": "topic_scoped",
+                        "score": float(r["composite_score"]),
+                        "signals": {
+                            "similarity": float(r["similarity"]),
+                            "q_norm": float(r["q_norm"]),
+                            "age_h": float(r["age_h"]),
+                            "bm25": float(r["bm25"]) if r["bm25"] is not None else 0.0
+                        }
+                    } for r in rows
+                ]
+            finally:
+                try:
+                    cur.close()
+                except Exception:
+                    pass
+                self.return_pg_connection(conn)
+
+        try:
+            return await self._to_thread(_q)
+        except Exception as e:
+            print(f"PostgreSQL topic-scoped retrieval error: {e}")
+            return []
+
+    async def _retrieve_global_fallback_postgres(
+        self, query: str, query_embedding: List[float], user_id: str, exclude_conversation_id: Optional[str], pol: RetrievalPolicy
+    ) -> List[Dict[str, Any]]:
+        if not query_embedding or pol.allow_global_fallback is False:
+            return []
+        vec_literal = _pgvector_literal(query_embedding)
+        ts_fn = "websearch_to_tsquery" if pol.tsquery_mode == "websearch" else "plainto_tsquery"
+
+        def _q() -> List[Dict[str, Any]]:
+            conn = self.get_pg_connection()
+            try:
+                cur = conn.cursor(cursor_factory=RealDictCursor)
+                cur.execute(
+                    f"""
+                    WITH candidates AS (
+                        SELECT
+                            content,
+                            created_at,
+                            (1 - (embedding <=> %s::vector)) AS similarity,
+                            COALESCE(final_quality_score, 0)/10.0 AS q_norm,
+                            EXTRACT(EPOCH FROM (NOW() - created_at))/3600.0 AS age_h,
+                            ts_rank_cd(ts, {ts_fn}('english', %s)) AS bm25
+                        FROM intelligent_memories
+                        WHERE user_id = %s
+                          AND (%s IS NULL OR conversation_id <> %s)
+                          AND (
+                            ts @@ {ts_fn}('english', %s)
+                            OR %s = ''
+                          )
+                          AND (1 - (embedding <=> %s::vector)) >= %s
+                        ORDER BY created_at DESC
+                        LIMIT 1000
+                    )
+                    SELECT
+                        content,
+                        similarity,
+                        q_norm,
+                        age_h,
+                        bm25,
+                        (%s * similarity) +
+                        (%s * COALESCE(bm25, 0)) +
+                        (%s * q_norm) +
+                        (%s * EXP(-%s * age_h)) +
+                        (%s) AS composite_score
+                    FROM candidates
+                    ORDER BY composite_score DESC
+                    LIMIT %s
+                    """,
+                    (
+                        vec_literal,
+                        query,
+                        user_id,
+                        exclude_conversation_id, exclude_conversation_id,
+                        query,
+                        query,
+                        vec_literal,
+                        max(pol.min_similarity, 0.35),  # stricter for global
+                        pol.w_sim,
+                        pol.w_bm25,
+                        pol.w_q,
+                        pol.w_recency, pol.lambda_decay,
+                        pol.scope_bonus_global_penalty,
+                        pol.k_global,
+                    ),
+                )
+                rows = cur.fetchall()
+                return [
+                    {
+                        "content": r["content"],
+                        "scope": "global_scoped",
+                        "score": float(r["composite_score"]),
+                        "signals": {
+                            "similarity": float(r["similarity"]),
+                            "q_norm": float(r["q_norm"]),
+                            "age_h": float(r["age_h"]),
+                            "bm25": float(r["bm25"]) if r["bm25"] is not None else 0.0
+                        }
+                    } for r in rows
+                ]
+            finally:
+                try:
+                    cur.close()
+                except Exception:
+                    pass
+                self.return_pg_connection(conn)
+
+        try:
+            return await self._to_thread(_q)
+        except Exception as e:
+            print(f"PostgreSQL global fallback retrieval error: {e}")
+            return []
+
+    # ------------- Neo4j Scoped Retrieval (Optional) -------------
+
+    async def _neo4j_conv_scoped(
+        self, query_embedding: List[float], user_id: str, conversation_id: str, pol: RetrievalPolicy, limit: int
+    ) -> List[Dict[str, Any]]:
+        driver = self.neo4j_driver
+        if not self.neo4j_available or driver is None:
+            return []
+
+        def _q() -> List[Dict[str, Any]]:
+            with driver.session() as session:
+                res = session.run(
+                    """
+                    CALL db.index.vector.queryNodes('memory_embedding_index', $fetch_k, $query_embedding)
+                    YIELD node, score
+                    WHERE node.user_id = $user_id AND node.conversation_id = $conversation_id
+                    WITH node, score,
+                         CASE WHEN node.final_quality_score IS NULL THEN 0.0 ELSE node.final_quality_score / 10.0 END AS q_norm
+                    RETURN node.content AS content,
+                           score AS similarity,
+                           q_norm AS q_norm,
+                           0.0 AS bm25,
+                           0.0 AS age_h,
+                           ($w_sim * score) + ($w_q * q_norm) + $scope_bonus AS composite_score
+                    ORDER BY composite_score DESC
+                    LIMIT $limit
+                    """,
+                    {
+                        "query_embedding": query_embedding,
+                        "user_id": user_id,
+                        "conversation_id": conversation_id,
+                        "fetch_k": max(200, limit * 40),
+                        "w_sim": pol.w_sim,
+                        "w_q": pol.w_q,
+                        "scope_bonus": pol.scope_bonus_conversation,
+                        "limit": limit,
+                    },
+                )
+                return [
+                    {
+                        "content": r["content"],
+                        "scope": "conversation_scoped",
+                        "score": float(r["composite_score"]),
+                        "signals": {
+                            "similarity": float(r["similarity"]),
+                            "q_norm": float(r["q_norm"]),
+                            "age_h": 0.0,
+                            "bm25": 0.0
+                        }
+                    } for r in res
+                ]
+        try:
+            return await self._to_thread(_q)
+        except _Neo4jError as e:
+            print(f"Neo4j conv-scoped retrieval error: {e}")
+            return []
+
+    async def _neo4j_topic_scoped(
+        self, query_embedding: List[float], user_id: str, topic: str, sub_topic: Optional[str], exclude_conversation_id: Optional[str],
+        pol: RetrievalPolicy, limit: int
+    ) -> List[Dict[str, Any]]:
+        driver = self.neo4j_driver
+        if not self.neo4j_available or driver is None:
+            return []
+
+        conv_ids = await self._get_conversation_ids_for_topic(user_id, topic, sub_topic, exclude_conversation_id)
+        if not conv_ids:
+            return []
+
+        def _q() -> List[Dict[str, Any]]:
+            with driver.session() as session:
+                res = session.run(
+                    """
+                    CALL db.index.vector.queryNodes('memory_embedding_index', $fetch_k, $query_embedding)
+                    YIELD node, score
+                    WHERE node.user_id = $user_id AND node.conversation_id IN $conv_ids
+                    WITH node, score,
+                         CASE WHEN node.final_quality_score IS NULL THEN 0.0 ELSE node.final_quality_score / 10.0 END AS q_norm
+                    RETURN node.content AS content,
+                           score AS similarity,
+                           q_norm AS q_norm,
+                           0.0 AS bm25,
+                           0.0 AS age_h,
+                           ($w_sim * score) + ($w_q * q_norm) + $scope_bonus AS composite_score
+                    ORDER BY composite_score DESC
+                    LIMIT $limit
+                    """,
+                    {
+                        "query_embedding": query_embedding,
+                        "user_id": user_id,
+                        "conv_ids": conv_ids,
+                        "fetch_k": max(400, limit * 80),
+                        "w_sim": pol.w_sim,
+                        "w_q": pol.w_q,
+                        "scope_bonus": pol.scope_bonus_topic,
+                        "limit": limit,
+                    },
+                )
+                return [
+                    {
+                        "content": r["content"],
+                        "scope": "topic_scoped",
+                        "score": float(r["composite_score"]),
+                        "signals": {
+                            "similarity": float(r["similarity"]),
+                            "q_norm": float(r["q_norm"]),
+                            "age_h": 0.0,
+                            "bm25": 0.0
+                        }
+                    } for r in res
+                ]
+        try:
+            return await self._to_thread(_q)
+        except _Neo4jError as e:
+            print(f"Neo4j topic-scoped retrieval error: {e}")
+            return []
+
+    async def _get_conversation_ids_for_topic(
+        self, user_id: str, topic: str, sub_topic: Optional[str], exclude_conversation_id: Optional[str]
+    ) -> List[str]:
+        def _q() -> List[str]:
+            conn = self.get_pg_connection()
+            try:
+                cur = conn.cursor()
+                if sub_topic:
+                    cur.execute(
+                        """
+                        SELECT id
+                        FROM conversations
+                        WHERE user_id = %s
+                          AND topic = %s
+                          AND sub_topic = %s
+                          AND (%s IS NULL OR id <> %s)
+                        """,
+                        (user_id, topic, sub_topic, exclude_conversation_id, exclude_conversation_id),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT id
+                        FROM conversations
+                        WHERE user_id = %s
+                          AND topic = %s
+                          AND (%s IS NULL OR id <> %s)
+                        """,
+                        (user_id, topic, exclude_conversation_id, exclude_conversation_id),
+                    )
+                rows = cur.fetchall()
+                return [r[0] for r in rows]
+            finally:
+                try:
+                    cur.close()
+                except Exception:
+                    pass
+                self.return_pg_connection(conn)
+        try:
+            return await self._to_thread(_q)
+        except Exception:
+            return []
+
+    async def _get_topic_for_conversation(self, user_id: str, conversation_id: str) -> Optional[Dict[str, Optional[str]]]:
+        def _q() -> Optional[Dict[str, Optional[str]]]:
+            conn = self.get_pg_connection()
+            try:
+                cur = conn.cursor(cursor_factory=RealDictCursor)
+                cur.execute(
+                    """
+                    SELECT topic, sub_topic
+                    FROM conversations
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (conversation_id, user_id),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                d = dict(row)  # normalize RealDictRow -> dict for precise typing
+                return {"topic": d.get("topic"), "sub_topic": d.get("sub_topic")}
+            finally:
+                try:
+                    cur.close()
+                except Exception:
+                    pass
+                self.return_pg_connection(conn)
+        try:
+            return await self._to_thread(_q)
+        except Exception:
+            return None
+
+    # ------------- Utility methods -------------
+
+    def _dedupe_candidates(self, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        seen: Dict[str, Dict[str, Any]] = {}
+        for c in candidates:
+            content = c.get("content") or ""
+            key = re.sub(r"\s+", " ", content.strip().lower())
+            prev = seen.get(key)
+            if prev is None or (c.get("score") or 0.0) > (prev.get("score") or 0.0):
+                seen[key] = c
+        return list(seen.values())
+
+    def _concat_candidates(self, candidates: List[Dict[str, Any]]) -> str:
+        parts = []
+        for c in candidates:
+            content = (c.get("content") or "").strip()
+            if content:
+                parts.append(f"Memory: {content}")
+        return "\n".join(parts)
+
+    # ------------- Simple fact extraction (compatibility) -------------
+
+    async def extract_facts_from_response(self, dialogue: str) -> List[Dict]:
+        await asyncio.sleep(0)
+        facts: List[Dict] = []
+        patterns = [
+            r'\bmy name is ([A-Za-z\s]+)\b',
+            r'\bi am ([A-Za-z\s]+)\b',
+            r'\bi work at ([A-Za-z\s]+)\b',
+            r'\bmy email is ([A-Za-z0-9@._]+)\b',
+            r'\bi live in ([A-Za-z\s,]+)\b',
+            r'\bmy phone is ([0-9\-\+\s\(\)]+)\b',
+            r'\bi like ([A-Za-z\s,]+)\b',
+            r'\bi prefer ([A-Za-z\s,]+)\b',
+            r'\bmy favorite ([A-Za-z\s]+) is ([A-Za-z\s]+)\b',
+        ]
+        for p in patterns:
+            for m in re.findall(p, dialogue, flags=re.IGNORECASE):
+                if isinstance(m, tuple):
+                    fact = f"{m[0]} is {m[1]}"
+                else:
+                    fact = str(m)
+                facts.append({"fact": fact, "confidence": 0.7, "source": "conversation"})
+        return facts
+
+    # ------------- Background helpers (compatibility) -------------
+
+    async def get_unscored_memories(self, user_id: str, limit: int = 10) -> List[Dict]:
+        def _select_sync() -> List[Dict]:
+            conn = self.get_pg_connection()
+            try:
+                cur = conn.cursor(cursor_factory=RealDictCursor)
+                cur.execute(
+                    """
+                    SELECT id, content, user_id, created_at as timestamp
+                    FROM intelligent_memories
+                    WHERE message_type = 'assistant'
+                      AND quality_score IS NULL
+                      AND content IS NOT NULL
+                    ORDER BY created_at ASC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                rows = cur.fetchall()
+                return [
+                    {"memory_id": str(r["id"]), "content": r["content"], "user_id": r["user_id"], "timestamp": r["timestamp"]}
+                    for r in rows
+                ]
+            finally:
+                try:
+                    cur.close()
+                except psycopg2.Error:
+                    pass
+                self.return_pg_connection(conn)
+
+        try:
+            return await self._to_thread(_select_sync)
+        except psycopg2.Error as e:
+            print(f"Database error getting unscored memories: {e}")
+            return []
+
+    async def score_unscored_memories_background(self, user_id: str) -> Dict[str, int]:
+        try:
+            unscored = await self.get_unscored_memories(user_id, limit=20)
+            scored_count = 0
+            for m in unscored:
+                content = m["content"]
+                # Simple heuristic fallback score; RIAI service will compute real R(t)
+                score = 5.0
+                cl = content.lower()
+                if any(w in cl for w in ["helpful", "worked", "resolved", "solution"]):
+                    score += 1.0
+                if len(content) < 50:
+                    score -= 1.0
+                score = max(1.0, min(10.0, score))
+                if await self.update_memory_quality_score(m["memory_id"], score):
+                    scored_count += 1
+
+            return {"total_found": len(unscored), "scored": scored_count, "cached": 0, "evaluated": scored_count}
+        except (psycopg2.Error, ValueError, RuntimeError) as e:
+            print(f"Background scoring error: {e}")
+            return {"total_found": 0, "scored": 0, "cached": 0, "evaluated": 0}
+
+    # ------------- Close -------------
+
+    def close(self):
+        if self.connection_pool:
+            try:
+                self.connection_pool.closeall()
+                print("✅ Memory: PostgreSQL pool closed")
+            except psycopg2.Error as e:
+                print(f"⚠️ Memory: Error closing pool: {e}")
+        if self.neo4j_driver:
+            try:
+                self.neo4j_driver.close()
+            except Exception:
+                pass
+
+
+# Global instance
+hybrid_intelligent_memory_system = HybridIntelligentMemorySystem()

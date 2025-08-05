@@ -1,0 +1,72 @@
+# Cache directories
+.cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Python package cache
+.pythonlibs/
+.local/
+.upm/
+
+# Development files
+.git/
+.gitignore
+.env
+.env.*
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Node modules (if any)
+node_modules/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Test files
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Documentation
+docs/
+*.md
+README*
+
+# Large asset files
+*.mp4
+*.avi
+*.mov
+*.zip
+*.tar.gz
+*.tar.bz2
+
+# Backup files
+*_backup/
+*.bak

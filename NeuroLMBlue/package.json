@@ -1,0 +1,19 @@
+{
+  "name": "workspace",
+  "version": "1.0.0",
+  "description": "An intelligent AI chat system that combines the power of large language models with persistent memory capabilities. NeuroLM provides a web-based chat interface with advanced features including memory management, file processing, and secure API key storage.",
+  "main": "sw.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "electron": "^37.2.3",
+    "electron-builder": "^26.0.12",
+    "electron-store": "^10.1.0",
+    "node-fetch": "^3.3.2",
+    "ws": "^8.18.3"
+  }
+}

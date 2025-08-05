@@ -1,0 +1,21 @@
+{
+  "name": "NeuroLM AI Assistant",
+  "short_name": "NeuroLM",
+  "description": "Advanced AI Memory System with intelligent conversation management",
+  "start_url": "/mobile",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#4f46e5",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["productivity", "utilities"],
+  "scope": "/",
+  "lang": "en"
+}
